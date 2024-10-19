@@ -142,9 +142,9 @@ class RateLimiter:
         self.__curr_idx = 0
 
         self.__latency_window = deque(maxlen=100)  # record of the last 100 latencies
-        self.__buffer = 50  # initial buffer (ms)
         self.__min_buffer = 30  # min buffer (ms)
-        self.__max_buffer = 150  # max buffer (ms)
+        self.__buffer = 40  # initial buffer (ms)
+        self.__max_buffer = 50  # max buffer (ms)
 
     def update_buffer(self):
         # calculate a moving average of the recent latencies
@@ -251,6 +251,7 @@ async def exchange_facing_worker(url: str, api_key: str, queue_manager: QueueMan
                         data = {'api_key': api_key, 'nonce': timestamp_ms(), 'req_id': request.req_id}
                         async with session.get(url, params=data) as resp:
                             latency = timestamp_ms() - request.create_time
+                            rate_limiter.record_latency(latency)
                             json = await resp.json()
                             if json['status'] == 'OK':
                                 logger.info(f"API response: status {resp.status}, resp {json}")

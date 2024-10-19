@@ -425,4 +425,13 @@ To mitigate this problem, we can consider several workarounds:
 
 1. **Implementing Backpressure on `generate_requests()`:** By controlling the rate at which requests are generated based on the current state of the queue, we can prevent the system from being overwhelmed. This approach assumes that we are able to modify the `generate_requests()` function.
 
-2. **Implementing Multithreading:** By implementing multithreading, we are able to increase the rate of consumption of the request, resolving the issue of the expired requests TTL. 
+2. **Implementing Multithreading:** By implementing multithreading, we are able to increase the rate of consumption of the request, resolving the issue of the expired requests TTL. See alternative!!
+
+
+
+
+## **_Multithreading_**
+
+### Changes to the current code
+
+1. Implement a thread safe rate limiter for each API Key, since we are running 

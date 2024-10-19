@@ -121,30 +121,67 @@ class Request:
     def update_create_time(self):
         self.create_time = timestamp_ms()
 
+thread_local = threading.local()
+
+def get_unique_nonce():
+    if not hasattr(thread_local, 'nonce_counter'):
+        thread_local.nonce_counter = 0
+    thread_local.nonce_counter += 1
+    timestamp = timestamp_ms()
+    thread_id = threading.get_ident()
+    # Concatenate values to form a unique nonce
+    nonce_str = f"{timestamp}{thread_id}{thread_local.nonce_counter}"
+    # Convert to integer if needed
+    return int(nonce_str)
+
+from collections import deque
+
 class ThreadSafeRateLimiter:
-    def __init__(self, per_second_rate):
+    def __init__(self, per_second_rate, min_duration_ms_between_requests):
         self.per_second_rate = per_second_rate
         self.request_times = [0] * per_second_rate
+        self.min_duration_ms_between_requests = min_duration_ms_between_requests
         self.curr_idx = 0
         self.lock = threading.Lock()
+        
+        self.latency_window = deque(maxlen=100)  # record of the last 100 latencies
+        self.buffer = 40  # initial buffer (ms)
+        self.min_buffer = 30  # min buffer (ms)
+        self.max_buffer = 50  # max buffer (ms)
+        
+        
+    def update_buffer(self):
+        # calculate a moving average of the recent latencies
+        if len(self.latency_window) > 0:
+            avg_latency = sum(self.latency_window) / len(self.latency_window)
+            # adjust buffer based on average latency
+            self.buffer = min(self.max_buffer, max(self.min_buffer, int(avg_latency * 1.1)))
+
+    def record_latency(self, latency):
+        self.latency_window.append(latency)
+        self.update_buffer()
 
     @contextlib.contextmanager
     def acquire(self, timeout_ms=0):
         enter_ms = timestamp_ms()
+        buffer = self.buffer
+        initial_buffer = self.min_duration_ms_between_requests * self.per_second_rate
+        
         while True:
             now = timestamp_ms()
             if now - enter_ms > timeout_ms > 0:
                 raise RateLimiterTimeout()
 
+            sleep_time = (initial_buffer + buffer - (now - self.request_times[self.curr_idx])) / 1000
+            
             with self.lock:
-                print(f"Thread {threading.get_ident()} acquired lock")
-                if now - self.request_times[self.curr_idx] > 1000:
+                if now - self.request_times[self.curr_idx] > initial_buffer + buffer:
                     self.request_times[self.curr_idx] = now
                     self.curr_idx = (self.curr_idx + 1) % self.per_second_rate
                     yield
                     return
 
-            time.sleep(0.001)
+            time.sleep(sleep_time)
 
 class ThreadSafeQueue(Queue):
     pass  # thread safety from queue.Queue
@@ -215,11 +252,12 @@ def exchange_worker(api_key, queue_manager: QueueManager, rate_limiter: ThreadSa
         try:
             with rate_limiter.acquire(timeout_ms=remaining_ttl):
                 try:
-                    data = {'api_key': api_key, 'nonce': timestamp_ms(), 'req_id': request.req_id}
+                    data = {'api_key': api_key, 'nonce': get_unique_nonce(), 'req_id': request.req_id}
                     response = session.get("http://127.0.0.1:9999/api/request", params=data, timeout=1.0)
                     json_resp = response.json()
+                    latency = timestamp_ms() - request.create_time
+                    rate_limiter.record_latency(latency)
                     if json_resp['status'] == 'OK':
-                        latency = timestamp_ms() - request.create_time
                         logger.info(f"API response: status {json_resp['status']}, resp {json_resp}")
                         benchmark.record_success(latency)
                     else:
@@ -243,7 +281,7 @@ def main():
     benchmark = Benchmark(benchmark_logger)
 
     # rate limiter per API key
-    rate_limiters = {key: ThreadSafeRateLimiter(PER_SEC_RATE) for key in VALID_API_KEYS}
+    rate_limiters = {key: ThreadSafeRateLimiter(PER_SEC_RATE, DURATION_MS_BETWEEN_REQUESTS) for key in VALID_API_KEYS}
 
     # request generator in a thread
     request_generator_thread = threading.Thread(
