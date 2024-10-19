@@ -9,9 +9,12 @@ from queue import Queue
 import requests
 import asyncio
 from statistics import mean
+from collections import deque
+
 
 
 # region: DO NOT CHANGE - the code within this region can be assumed to be "correct"
+
 PER_SEC_RATE = 20
 DURATION_MS_BETWEEN_REQUESTS = int(1000 / PER_SEC_RATE)
 REQUEST_TTL_MS = 1000
@@ -134,7 +137,6 @@ def get_unique_nonce():
     # Convert to integer if needed
     return int(nonce_str)
 
-from collections import deque
 
 class ThreadSafeRateLimiter:
     def __init__(self, per_second_rate, min_duration_ms_between_requests):
@@ -172,10 +174,11 @@ class ThreadSafeRateLimiter:
             if now - enter_ms > timeout_ms > 0:
                 raise RateLimiterTimeout()
 
+            # sleep the exact remaining time to the next second
             sleep_time = (initial_buffer + buffer - (now - self.request_times[self.curr_idx])) / 1000
             
             with self.lock:
-                if now - self.request_times[self.curr_idx] > initial_buffer + buffer:
+                if now - self.request_times[self.curr_idx] >= initial_buffer + buffer:
                     self.request_times[self.curr_idx] = now
                     self.curr_idx = (self.curr_idx + 1) % self.per_second_rate
                     yield
@@ -191,7 +194,7 @@ class QueueManager:
     def __init__(self, main_queue: ThreadSafeQueue, dlq_queue: ThreadSafeQueue):
         self.main_queue = main_queue
         self.dlq_queue = dlq_queue
-        self.max_retry_count = 3
+        self.max_retry_count = 5
         self.graveyard = set()
         self.lock = threading.Lock()
 
@@ -237,7 +240,7 @@ def generate_requests_threadsafe(queue: ThreadSafeQueue):
         time.sleep(sleep_ms / 1000.0)
 
 
-def exchange_worker(api_key, queue_manager: QueueManager, rate_limiter: ThreadSafeRateLimiter, logger, benchmark: Benchmark):
+def exchange_facing_worker(api_key, queue_manager: QueueManager, rate_limiter: ThreadSafeRateLimiter, logger, benchmark: Benchmark):
     """Process requests in a thread-safe way."""
     session = requests.Session()
     while True:
@@ -307,11 +310,11 @@ def main():
     metrics_thread.start()
 
 
-    # Create and start worker threads
+    # exchange-facing workers in threads
     threads = []
     for api_key in VALID_API_KEYS:
         t = threading.Thread(
-            target=exchange_worker,
+            target=exchange_facing_worker,
             args=(api_key, queue_manager, rate_limiters[api_key], logger, benchmark),
             daemon=True
         )

@@ -1,35 +1,36 @@
-## **Benchmarking** 
+# Maximizing Client Throughput
 
-### **_How Benchmarking is Performed_**
+## Introduction
 
-The benchmarking process is designed to measure the performance of the rate limiter by generating requests, processing them through worker tasks, and recording the outcomes. It focuses on capturing metrics like **throughput (TPS)**, **latency**, and **failure rates**, ensuring an accurate evaluation of improvements.
+This document presents a review and modification of the client code to maximize throughput while adhering to server-imposed rate limits. It outlines the issues identified in the existing implementation, the design choices made to address them, and the impact of these changes on performance. The focus is on refining the **rate limiter** and improving **queue management** to handle both bursty and constant-rate traffic efficiently.
+
+
+## Benchmarking the Client
+
+### Methodology
+
+Benchmarking is essential to measure the performance improvements accurately. The process involves:
 
 1. **Setup:**
-   - **5 API keys** are used, each having a worker task sending requests concurrently.
-   - Each request is passed through a **rate limiter** to control the request rate.
-   - A **benchmarking class** records key metrics, such as:
-     - **Total successful requests**
-     - **Total failed requests**
-     - **Average latency per request**
-     - **Throughput (requests per second, TPS)**
+   - **API Keys:** Use **5 API keys**, each associated with a worker task sending requests concurrently.
+   - **Rate Limiter:** Implement a rate limiter to control request rates per API key.
+   - **Metrics Collection:** Record key performance metrics:
+     - Total successful requests
+     - Total failed requests
+     - Average latency per request
+     - Throughput (requests per second, TPS)
 
-2. **Benchmarking Steps:**
-   - **Generate Requests:**  
-     Requests are continuously generated and added to a queue.
-   - **Process Requests:**  
-     Worker tasks fetch requests from the queue and send them through the **rate limiter** to the server.
-   - **Measure Metrics:**  
-     The **Benchmark class** tracks:
-     - When a request starts and completes.
-     - Whether the request was successful or failed.
-     - The latency of each request.
-   - **Log Results:**  
-     Every 5 seconds, the benchmark metrics are printed to provide real-time feedback on performance.
+2. **Execution:**
+   - **Request Generation:** Continuously generate requests and add them to a queue.
+   - **Request Processing:** Worker tasks fetch requests from the queue, pass them through the rate limiter, and send them to the server.
+   - **Metrics Tracking:** Use a benchmarking class to monitor request timings, success rates, and latencies.
+   - **Real-Time Feedback:** Log and print metrics every 5 seconds for monitoring.
 
 
-## **Client Rate Limiter**
+## Enhancing the Rate Limiter
 
-### **_Current Implementation_**
+### Original Implementation
+
 ```python
 class RateLimiter:
     def __init__(self, per_second_rate, min_duration_ms_between_requests):
@@ -38,7 +39,7 @@ class RateLimiter:
         self.__last_request_time = 0
         self.__request_times = [0] * per_second_rate
         self.__curr_idx = 0
-    
+
     @contextlib.asynccontextmanager
     async def acquire(self, timeout_ms=0):
         enter_ms = timestamp_ms()
@@ -52,19 +53,20 @@ class RateLimiter:
                 await asyncio.sleep(0.001)
                 continue
 
-            # Circular Buffer Check 
+            # Circular Buffer Check
             if now - self.__request_times[self.__curr_idx] <= 1000:
                 await asyncio.sleep(0.001)
                 continue
 
             break
-        
+
         self.__last_request_time = self.__request_times[self.__curr_idx] = now
         self.__curr_idx = (self.__curr_idx + 1) % self.__per_second_rate
         yield self
 ```
 ---
-### **_Issue_**
+### Identified Issues
+
 Currently, the rate limiter has **two conditional statements** that trigger a brief **sleep** with the goal of controlling the rate at which requests are sent:
 
 1. **Fixed Interval Check**:  
@@ -83,14 +85,16 @@ Currently, the rate limiter has **two conditional statements** that trigger a br
        continue
    ```
 
-#### **_Redundancy_**
-Both checks serve to **regulate the rate of requests**, but they **overlap** in functionality:
-- The **Circular Buffer Check** is sufficient for **rate-limiting** because it tracks the **timing of all requests** and enforces the **1-second interval across 20 requests**.
-- The **Fixed Interval Check** adds unnecessary **rigidity** by enforcing a **fixed time interval** between consecutive requests, limiting **flexibility** for bursty traffic 
+**Redundancy in Checks:**
+  - **Fixed Interval Check:** Enforces a minimum time between consecutive requests.
+  - **Circular Buffer Check:** Ensures no more than a specified number of requests are sent within any 1-second window.
+  - **Overlap:** Both checks aim to control request rates but the **Circular Buffer Check** alone suffices for rate limiting.
 
+---
 
-### **_Solution_**
-Remove the **Fixed Interval Check**, which is redundant and adds unnecessary **context switching**. The **Circular Buffer Check** allows for more **adaptive rate limiting**, handling both **burst** and **constant-rate traffic** more efficiently. Example of why being able to handle both kinds of traffic can matter: 
+### Proposed Solution
+
+**Remove the Fixed Interval Check**, allowing the **Circular Buffer Check** to regulate the request rate effectively, the **Fixed Interval Check** is redundant and adds unnecessary **context switching**. The **Circular Buffer Check** allows for more **adaptive rate limiting**, handling both **burst** and **constant-rate traffic** more efficiently. Example of why being able to handle both kinds of traffic can matter: 
 
 
 - **Bursty Traffic:**  
@@ -103,7 +107,7 @@ Remove the **Fixed Interval Check**, which is redundant and adds unnecessary **c
 
 ---
 
-### **_Observation: Performance Improvement_**
+### Observation: Performance Improvement
 
 **Benchmark Results**:  
 After removing the **Fixed Interval Check**, throughput increased from **~74 TPS to ~85 TPS**.
@@ -119,9 +123,9 @@ After removing the **Fixed Interval Check**, throughput increased from **~74 TPS
 - The **Circular Buffer Check** alone ensures requests are **properly spaced across a 1-second window**, allowing the client to handle both **burst and constant-rate traffic** without unnecessary pauses. This results in smoother, **more efficient request handling**.
 
 ---
-### **_Caveat: Potential 429 Errors Due to Latency Discrepancies_**
+### Potential Issue: 429 Errors Due to Latency
 
-While removing the **Fixed Interval Check** improves throughput, it may still lead to **429 errors**. This is due to **timestamp discrepancies** between the **client** and **server** rate limiters, caused by **incoming latency differences**.
+While removing the **Fixed Interval Check** improves throughput, it may still lead to **429 errors**. This is due to **timestamp discrepancies** between the **client** and **server** rate limiters, caused by **incoming latency differences** on the server-side.
 
 #### **How the Issue Occurs:**
 - The **client-side rate limiter** records the difference between the **current request** and the **20th previous request** as **1000 ms (1 second)**, passing the client-side check.
@@ -149,7 +153,8 @@ Since the **server's calculation** shows the difference as **996 ms** instead of
 To prevent **429 errors**, it's important to account for **latency variability** between requests. Adding a **latency buffer** (e.g., an extra 50-100 ms delay) on the client side can help ensure that **timestamp discrepancies** don't cause requests to fail the **server's rate limiter**.
 
 ---
-### **_Improved Version_** 
+### Improved Version: Adaptive Buffering
+
 ```python
 class RateLimiter:
     def __init__(self, per_second_rate, min_duration_ms_between_requests):
@@ -211,7 +216,7 @@ This enhanced version introduces **adaptive buffering**, which fine-tunes the bu
      ```python
      buffer = min(self.__max_buffer, max(self.__min_buffer, int(avg_latency * 1.1)))
      ```
-     This ensures the buffer size adjusts proportionally to observed latency while staying within a **safe range** (30 ms to 150 ms).
+    - This ensures the buffer size adjusts proportionally to observed latency while staying within a **safe range** (30 ms to 150 ms).
 
 2. **Dynamic Sleep Calculation:**  
    - If the time between requests violates the rate limit, the **exact remaining time** needed to comply is calculated:
@@ -229,17 +234,18 @@ Even though the **maximum server-side latency** is known (e.g., `MAX_LATENCY_MS 
 
 With **adaptive buffering**, the system continuously **learns from recent trends** and dynamically adjusts the buffer to balance **performance and compliance**.
 
+---
 
-### **_Conclusion_**
+### Conclusion
 
 1. Keep the client's circular buffer checks to allow for more adaptive rate of sending requests and remove the fixed interval check. 
 2. Account for the server's latency and dynamically adjusts it for additional buffer when sending requests, to prevent rate limiting errors (429). 
 
 
 
-## **Queue**
+## Queue
 
-### **_Current Implementation_**
+### Current Implementation
 ```python
 async def exchange_facing_worker(url: str, api_key: str, queue: Queue, logger: logging.Logger):
     rate_limiter = RateLimiter(PER_SEC_RATE, DURATION_MS_BETWEEN_REQUESTS)
@@ -266,11 +272,13 @@ async def exchange_facing_worker(url: str, api_key: str, queue: Queue, logger: l
                 logger.warning(f"Ignoring request {request.req_id} due to TTL in rate limiter.")
 ```
 
-### **_Issue_**
+---
+### Issue
 
 The current implementation allows **more requests to be generated** than the client can process. This leads to **expired TTLs** for unprocessed requests in the queue. When the `remaining_ttl` drops below 0 or when there is a **request timeout**, the request is **dropped**. While this prevents the queue from becoming clogged, it also results in **wasted resources** and **lost requests** that could have been retried.
 
-### **_Solution: Queue Manager with Dead Letter Queue (DLQ)_**
+---
+### Solution: Queue Manager with Dead Letter Queue (DLQ)
 
 To improve request management, we introduce a **Queue Manager** that utilizes:
 1. **Main Queue:** Processes requests under normal operation.
@@ -299,10 +307,12 @@ In the event that the request hits the max retry limit, we will store the `req_i
 
 This design ensures that **retry requests** are **handled promptly** without requiring a complex priority queue, optimizing for both **simplicity** and **timeliness**.
 
-### **_Lifecycle_**
+---
+### Lifecycle
 ![New Sequence with Queue Manager](./img/uml_seq_diagram.png)
 
-### **_Improved Version_**
+---
+### Improved Version: Queue Manager
 
 ```python
 # Queue Manager
@@ -417,7 +427,8 @@ def main():
     loop.run_forever()
 ```
 
-### **Caveat: Slow Rate of Consuming Requests**
+---
+### Caveat: Slow Rate of Consuming Requests
 
 We are still limited to only **5 API keys**, each associated with a worker consuming from the queue concurrently. This limitation results in a processing rate that is too slow, causing requests to expire (TTL exceeded) before the workers can handle them. The issue is further exacerbated by latencies on both the client and server sides due to rate limiting constraints, which worsens the rate at which requests are consumed from the queue. As a result, even though the Dead Letter Queue (DLQ) allows for retries, it doesn't resolve the underlying issue—the root cause remains unaddressed.
 
@@ -425,13 +436,209 @@ To mitigate this problem, we can consider several workarounds:
 
 1. **Implementing Backpressure on `generate_requests()`:** By controlling the rate at which requests are generated based on the current state of the queue, we can prevent the system from being overwhelmed. This approach assumes that we are able to modify the `generate_requests()` function.
 
-2. **Implementing Multithreading:** By implementing multithreading, we are able to increase the rate of consumption of the request, resolving the issue of the expired requests TTL. See alternative!!
+2. **Implementing Multithreading:** By implementing multithreading, we are able to increase the rate of consumption of the request, resolving the issue of the expired requests TTL. See below for alternative version of running the client.
 
 
 
 
-## **_Multithreading_**
+## Exploring Multithreading 
 
+### Rationale
+
+To increase the rate of request processing and reduce TTL expirations, multithreading can be introduced.
+
+---
 ### Changes to the current code
 
-1. Implement a thread safe rate limiter for each API Key, since we are running 
+1. Implement multithreading process to run:
+  - Request Generator (Assuming we are able to change the `generate_requests() function`, for multithreading we need to refactor the given `generate_requests()` and not use `asyncio`)
+    ```python
+    # request generator in a thread
+    request_generator_thread = threading.Thread(
+        target=generate_requests_threadsafe,
+        args=(main_queue,),
+        daemon=True
+    )
+    request_generator_thread.start()
+
+    ```
+  - DLQ Requeue
+    ```python
+    # DLQ requeue task in a thread
+    dlq_requeue_thread = threading.Thread(
+        target=queue_manager.requeue_from_dlq,
+        daemon=True
+    )
+    dlq_requeue_thread.start()
+    ```
+  - Metrics Printing
+    ```python
+    # metrics printer in a thread
+    metrics_thread = threading.Thread(
+        target=metrics_printer,
+        args=(benchmark,),
+        daemon=True
+    )
+    metrics_thread.start()
+    ```
+  - Exchange Facing Workers
+    ```python
+    threads = []
+    for api_key in VALID_API_KEYS:
+        t = threading.Thread(
+            target=exchange_facing_worker,
+            args=(api_key, queue_manager, rate_limiters[api_key], logger, benchmark),
+            daemon=True
+        )
+        t.start()
+        threads.append(t)
+    ```
+2. Implement Locking on Shared Resources
+  - Queue Manager. Since all the workers are sharing the same queue, there will be resource contention when dequing and pushing to queue.
+    ```python
+    class QueueManager:
+      def __init__(self, main_queue: ThreadSafeQueue, dlq_queue: ThreadSafeQueue):
+          self.main_queue = main_queue
+          self.dlq_queue = dlq_queue
+          self.max_retry_count = 5
+          self.graveyard = set()
+          self.lock = threading.Lock()
+
+      def add_request(self, request: Request):
+          """Add a new request to the main queue."""
+          with self.lock:
+              self.main_queue.put(request)
+
+      def requeue_from_dlq(self, benchmark: Benchmark):
+          """Requeue requests from DLQ to the main queue with priority."""
+          while True:
+              request: Request = self.dlq_queue.get()
+              if request.retry_count >= self.max_retry_count:
+                  self.graveyard.add(request.req_id)
+                  print(f"Request {request.req_id} moved to graveyard.")
+                  benchmark.record_failure()
+              else:
+                  request.retry_count += 1
+                  request.update_create_time()
+                  with self.lock:
+                      self.main_queue.put(request)
+                      
+              self.dlq_queue.task_done()
+
+      def add_to_dlq(self, request: Request):
+          """Add a failed request to the DLQ."""
+          with self.lock:
+              self.dlq_queue.put(request)
+      
+      def get_from_main(self):
+          """Get a request from the main queue."""
+          return self.main_queue.get()
+    ```
+  - Rate Limiter (Thread safe)
+    ```python
+    class ThreadSafeRateLimiter:
+      def __init__(self, per_second_rate, min_duration_ms_between_requests):
+          self.per_second_rate = per_second_rate
+          self.request_times = [0] * per_second_rate
+          self.min_duration_ms_between_requests = min_duration_ms_between_requests
+          self.curr_idx = 0
+          self.lock = threading.Lock()
+          
+          self.latency_window = deque(maxlen=100)  # record of the last 100 latencies
+          self.buffer = 40  # initial buffer (ms)
+          self.min_buffer = 30  # min buffer (ms)
+          self.max_buffer = 50  # max buffer (ms)
+          
+          
+      def update_buffer(self):
+          # calculate a moving average of the recent latencies
+          if len(self.latency_window) > 0:
+              avg_latency = sum(self.latency_window) / len(self.latency_window)
+              # adjust buffer based on average latency
+              self.buffer = min(self.max_buffer, max(self.min_buffer, int(avg_latency * 1.1)))
+
+      def record_latency(self, latency):
+          self.latency_window.append(latency)
+          self.update_buffer()
+
+      @contextlib.contextmanager
+      def acquire(self, timeout_ms=0):
+          enter_ms = timestamp_ms()
+          buffer = self.buffer
+          initial_buffer = self.min_duration_ms_between_requests * self.per_second_rate
+          
+          while True:
+              now = timestamp_ms()
+              if now - enter_ms > timeout_ms > 0:
+                  raise RateLimiterTimeout()
+
+              # sleep the exact remaining time to the next second
+              sleep_time = (initial_buffer + buffer - (now - self.request_times[self.curr_idx])) / 1000
+              
+              with self.lock:
+                  if now - self.request_times[self.curr_idx] >= initial_buffer + buffer:
+                      self.request_times[self.curr_idx] = now
+                      self.curr_idx = (self.curr_idx + 1) % self.per_second_rate
+                      yield
+                      return
+
+              time.sleep(sleep_time)
+    ```
+  3. Getting Unique Nonces when creating request. This is needed because currently the nonce used is timestamp-based, however there will potentially be multiple requests being sent at the same time resulting in bad nonces. 
+  ```python
+  thread_local = threading.local()
+  def get_unique_nonce():
+    if not hasattr(thread_local, 'nonce_counter'):
+        thread_local.nonce_counter = 0
+    thread_local.nonce_counter += 1
+    timestamp = timestamp_ms()
+    thread_id = threading.get_ident()
+    # concat values to form a unique nonce
+    nonce_str = f"{timestamp}{thread_id}{thread_local.nonce_counter}"
+    # convert to integer if needed
+    return int(nonce_str)
+  ```
+
+## Comparison between Asyncio and Threading Client
+
+Currently, the **Asyncio client (~84 TPS)** is faster than the **Threading client (~77 TPS)** in terms of throughput. This higher throughput in the Asyncio client is due to its ability to handle a large number of concurrent I/O operations efficiently using asynchronous programming. However, despite its higher TPS, the Asyncio client is **slower in processing the requests inside the queue**, which results in **more requests timing out due to expired TTLs**.
+
+![](./img/asyncio_stats.png)
+![](./img/threading_stats.png)
+
+In contrast, the Threading client has **multiple threads running workers that are dequeuing the requests from the same queue simultaneously**. This concurrent dequeuing allows the Threading client to process requests more quickly from the queue, thereby **reducing the number of requests that expire due to TTL**. As a result, the Threading client, despite having a slightly lower overall TPS, is more effective at preventing request timeouts caused by TTL expiration.
+
+---
+
+### Explanation of the Observed Behavior
+
+- **Asyncio Client:**
+  - **Single-threaded Event Loop:** The Asyncio client operates on a single-threaded event loop, where tasks are scheduled and executed sequentially in an asynchronous manner.
+  - **Task Scheduling:** Due to the cooperative multitasking nature of Asyncio, tasks yield control to the event loop at `await` points, which can lead to delays if tasks are not written to maximize concurrency.
+  - **Queue Processing:** Since the event loop processes tasks sequentially, the rate at which requests are dequeued from the queue may not keep up with the rate at which they are generated, especially under high load.
+  - **TTL Expiry:** The slower dequeuing leads to requests spending more time in the queue, increasing the likelihood of requests exceeding their TTL before being processed.
+
+- **Threading Client:**
+  - **Multiple Threads:** The Threading client uses multiple threads, with each thread running an `exchange_worker` that continuously dequeues and processes requests.
+  - **Concurrent Dequeuing:** Multiple threads can dequeue requests simultaneously, which increases the rate at which requests are removed from the queue and processed.
+  - **Reduced TTL Expiry:** Faster dequeuing reduces the time requests spend in the queue, decreasing the chance of TTL expiration.
+  - **GIL Limitations:** Although Python's Global Interpreter Lock (GIL) can limit the performance benefits of threading for CPU-bound tasks, the Threading client performs I/O-bound operations where threads can release the GIL during network I/O.
+
+---
+### Detailed Comparison
+
+| Aspect                   | Asyncio Client                                                  | Threading Client                                                |
+|--------------------------|-----------------------------------------------------------------|-----------------------------------------------------------------|
+| **Concurrency Model**    | Single-threaded asynchronous event loop                         | Multithreading                                                  |
+| **Queue Processing**     | Sequential dequeuing by coroutines scheduled on the event loop  | Concurrent dequeuing by multiple threads                        |
+| **Rate Limiting**        | Shared rate limiter per API key within the event loop           | Individual rate limiters per thread/API key                     |
+| **TTL Expiry**           | Higher due to slower dequeuing from the queue                   | Lower due to faster dequeuing and processing                    |
+| **Throughput (TPS)**     | Higher overall TPS (~84 TPS)                                    | Slightly lower TPS (~77 TPS)                                    |
+| **Resource Utilization** | Efficient handling of I/O-bound tasks with minimal overhead     | Increased overhead due to thread management and context switching |
+| **Scalability**          | Scales well with asynchronous I/O but may bottleneck on event loop | Scales with the number of threads but limited by GIL and overhead |
+| **Complexity**           | Requires understanding of asynchronous programming paradigms    | Simpler threading model but must handle thread safety           |
+
+---
+### Conclusion
+
+The Asyncio client achieves higher throughput due to its efficient handling of asynchronous I/O operations. However, its single-threaded event loop may become a bottleneck in processing requests from the queue promptly, leading to more TTL expirations. On the other hand, the Threading client benefits from multiple threads dequeuing requests concurrently, reducing TTL expirations but incurring additional overhead from thread management, resulting in slightly lower TPS.

@@ -20,23 +20,11 @@ class RateLimiter:
         
     def acquire_slot_if_possible(self):
         now = timestamp_ms()
-        # print(f'now: {now}, curr_idx: {self.__curr_idx}, access_times: {self.__access_times}, access_time {self.__access_times[self.__curr_idx]} = {now - self.__access_times[self.__curr_idx]}\n')  # stlog
-        # current time and last request time should have a 1 second difference
-        # because the difference in index is 20. 
         if now - self.__access_times[self.__curr_idx] > 1000:
             self.__access_times[self.__curr_idx] = now
             self.__curr_idx = (self.__curr_idx + 1) % self.__per_second_rate
             return True
         return False
-    
-    # stlog
-    def to_dict(self):
-        return {
-            'per_second_rate': self.__per_second_rate,
-            'access_times': self.__access_times,
-            'curr_idx': self.__curr_idx
-        }
-    
 
 
 class PerApiKeyState:

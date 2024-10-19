@@ -209,7 +209,7 @@ class QueueManager:
     
             if request.retry_count >= max_retry:
                 print(f"Request {request.req_id} has reached max retry count. sending to the graveyard.")
-                self.__graveyard.add(request.req_id) # store the really dead requests
+                self.__graveyard.add(request.req_id) # store the 💀 requests
                 print(f"Graveyard count: {len(self.__graveyard)}")
                 benchmark.record_failure()
 

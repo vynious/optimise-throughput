@@ -84,8 +84,6 @@ class RateLimiter:
             if now - enter_ms > timeout_ms > 0:
                 raise RateLimiterTimeout()
 
-            
-            # redundant check since the circular buffer is checking for the same condition
             if now - self.__last_request_time <= self.__min_duration_ms_between_requests:
                 await asyncio.sleep(0.0001)
                 continue
