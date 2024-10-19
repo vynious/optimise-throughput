@@ -1,6 +1,7 @@
 import time
 import random
 from collections import defaultdict
+import json 
 
 from flask import Flask, request, jsonify, abort
 
@@ -16,14 +17,26 @@ class RateLimiter:
         self.__per_second_rate = per_second_rate
         self.__access_times = [0] * per_second_rate
         self.__curr_idx = 0
-
+        
     def acquire_slot_if_possible(self):
         now = timestamp_ms()
+        # print(f'now: {now}, curr_idx: {self.__curr_idx}, access_times: {self.__access_times}, access_time {self.__access_times[self.__curr_idx]} = {now - self.__access_times[self.__curr_idx]}\n')  # stlog
+        # current time and last request time should have a 1 second difference
+        # because the difference in index is 20. 
         if now - self.__access_times[self.__curr_idx] > 1000:
             self.__access_times[self.__curr_idx] = now
             self.__curr_idx = (self.__curr_idx + 1) % self.__per_second_rate
             return True
         return False
+    
+    # stlog
+    def to_dict(self):
+        return {
+            'per_second_rate': self.__per_second_rate,
+            'access_times': self.__access_times,
+            'curr_idx': self.__curr_idx
+        }
+    
 
 
 class PerApiKeyState:
@@ -31,6 +44,14 @@ class PerApiKeyState:
         self.prev_nonce = 0
         self.rate_limiter = RateLimiter(20)
         self.error_429s = 0
+        
+    # stlog 
+    def to_dict(self):
+        return {
+            'prev_nonce': self.prev_nonce,
+            'rate_limiter': self.rate_limiter.to_dict(),
+            'error_429s': self.error_429s
+        }
 
 
 VALID_API_KEYS = ['UT4NHL1J796WCHULA1750MXYF9F5JYA6',
@@ -50,6 +71,10 @@ def api_request():
         return abort(401)
 
     state = per_api_key_state[api_key]
+    
+    # print(f'state for {api_key}: {json.dumps(state.to_dict())}\n')  # stlog
+    
+    # sleeps for 0 - 50 ms
     incoming_latency_ms = random.randint(0, MAX_LATENCY_MS)
     time.sleep(incoming_latency_ms / 1000.0)
 
@@ -57,6 +82,7 @@ def api_request():
         return abort(403)
 
     if not state.rate_limiter.acquire_slot_if_possible():
+        # print(f'429 for {api_key}\n')  # stlog
         state.error_429s += 1
         return abort(429)
 
@@ -72,6 +98,9 @@ def api_request():
 
     outgoing_latency_ms = random.randint(0, MAX_LATENCY_MS)
     time.sleep(outgoing_latency_ms / 1000.0)
+    
+    # total_latency = incoming_latency_ms + outgoing_latency_ms
+    # print(f'api_key: {api_key}, req_id: {req_id}, total_latency: {total_latency}\n')
 
     return jsonify({"status": "OK", 'req_id': req_id})
 

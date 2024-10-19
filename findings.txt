@@ -1,0 +1,65 @@
+
+
+Your task is to review and modify the client code to maximize the throughput available to the client
+
+We’d like to hear about the issues you found in the existing code, what design choices you used (
+    e.g why you might use asynchronous code instead of multithreading) 
+and how you determined the impact your design had on speed. 
+You may face some decisions where there is no clear “best” choice - there is no magic answer, each approach will have tradeoffs.
+
+- multi-threading 
+pros: 
+    increases rate for sending requests
+cons: 
+    difficulty maintaining the nonces
+    still rate limited regardless of rate of sending requests
+
+- async 
+pros:
+    nonce can be managed by timestamp
+cons: 
+    slower than multi-threading
+
+
+- rate limiter
+constraints: 
+    20 requests per second per api key
+    request ttl 
+
+------
+
+currently the queue is generate more requests than the 5 api 
+worker tasks can process it, which leads to the error of the 
+request timeout due to expired ttl. 
+
+we can suggest to increase the consumption rate of the requests inside the
+queue using multithreading. 
+
+each 5 api keys can have 5 worker task running simultaneously 
+while adhering to the rate limiter.
+
+we can improve the rate limiter to use a more efficient rate limiter 
+to control the rate of sending the request
+
+------
+
+currently the rate limiter for client and server is similar
+in the way whereby both uses a circular buffer to keep track of 
+the timestamp of each requests. since the rate limiting is capped 
+on the side of the server and the intention function of the client
+rate limiter is to maximise the throughput without getting blocked 
+by the server. 
+
+the client rate limits on the difference between current request and
+20 request ago, it checks if the timestamp difference at least 1 second
+
+the server i have compared the effectiveness of the rate limiter,
+for example the time difference between request 1 and request 20 is about
+1100ms to 1350ms, with 200ms to 350ms difference which includes randomly 
+generated latency on the server, the generated latency on the server averages
+to about 60ms. therefore the actual leeway for optimisation is about 140ms to 290ms
+
+------ 
+
+
+
