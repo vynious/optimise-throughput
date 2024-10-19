@@ -154,14 +154,14 @@ To prevent **429 errors**, it's important to account for **latency variability**
 class RateLimiter:
     def __init__(self, per_second_rate, min_duration_ms_between_requests):
         self.__per_second_rate = per_second_rate
-        self.min_duration_ms_between_requests = min_duration_ms_between_requests
+        self.__min_duration_ms_between_requests = min_duration_ms_between_requests
         self.__request_times = [0] * per_second_rate
         self.__curr_idx = 0
 
         self.__latency_window = deque(maxlen=100)  # record of the last 100 latencies
         self.__buffer = 50  # initial buffer (ms)
-        self.__min_buffer = 30  # min buffer
-        self.__max_buffer = 150  # max buffer
+        self.__min_buffer = 30  # min buffer (ms)
+        self.__max_buffer = 150  # max buffer (ms)
 
     def update_buffer(self):
         # calculate a moving average of the recent latencies
@@ -171,7 +171,6 @@ class RateLimiter:
             self.__buffer = min(self.__max_buffer, max(self.__min_buffer, int(avg_latency * 1.1)))
 
     def record_latency(self, latency):
-        # record the latency for adaptive buffering
         self.__latency_window.append(latency)
         self.update_buffer()
     
@@ -179,15 +178,17 @@ class RateLimiter:
     async def acquire(self, timeout_ms=0):
         enter_ms = timestamp_ms()
         buffer = self.__buffer
+        initial_buffer = self.__min_duration_ms_between_requests * self.__per_second_rate
+        
         while True:
             now = timestamp_ms()
 
             if now - enter_ms > timeout_ms > 0:
                 raise RateLimiterTimeout()
 
-            if now - self.__request_times[self.__curr_idx] <= 1000 + buffer:
+            if now - self.__request_times[self.__curr_idx] <= initial_buffer + buffer:
                 # sleep the exact remaining time to the next second
-                sleep_time = (1000 + buffer - (now - self.__request_times[self.__curr_idx])) / 1000
+                sleep_time = (initial_buffer + buffer - (now - self.__request_times[self.__curr_idx])) / 1000
                 await asyncio.sleep(sleep_time)
                 continue
             
@@ -215,7 +216,7 @@ This enhanced version introduces **adaptive buffering**, which fine-tunes the bu
 2. **Dynamic Sleep Calculation:**  
    - If the time between requests violates the rate limit, the **exact remaining time** needed to comply is calculated:
      ```python
-     sleep_time = (1000 + buffer - (now - self.__request_times[self.__curr_idx])) / 1000
+     sleep_time = (initial_buffer + buffer - (now - self.__request_times[self.__curr_idx])) / 1000
      ```
    - This approach avoids **excessive sleeping** and ensures the request rate is optimized.
 

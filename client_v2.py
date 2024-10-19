@@ -137,7 +137,7 @@ class RateLimiterTimeout(Exception):
 class RateLimiter:
     def __init__(self, per_second_rate, min_duration_ms_between_requests):
         self.__per_second_rate = per_second_rate
-        self.min_duration_ms_between_requests = min_duration_ms_between_requests
+        self.__min_duration_ms_between_requests = min_duration_ms_between_requests
         self.__request_times = [0] * per_second_rate
         self.__curr_idx = 0
 
@@ -161,15 +161,17 @@ class RateLimiter:
     async def acquire(self, timeout_ms=0):
         enter_ms = timestamp_ms()
         buffer = self.__buffer
+        initial_buffer = self.__min_duration_ms_between_requests * self.__per_second_rate
+        
         while True:
             now = timestamp_ms()
 
             if now - enter_ms > timeout_ms > 0:
                 raise RateLimiterTimeout()
 
-            if now - self.__request_times[self.__curr_idx] <= 1000 + buffer:
+            if now - self.__request_times[self.__curr_idx] <= initial_buffer + buffer:
                 # sleep the exact remaining time to the next second
-                sleep_time = (1000 + buffer - (now - self.__request_times[self.__curr_idx])) / 1000
+                sleep_time = (initial_buffer + buffer - (now - self.__request_times[self.__curr_idx])) / 1000
                 await asyncio.sleep(sleep_time)
                 continue
             
@@ -223,13 +225,19 @@ class QueueManager:
         Adds failed requests to the DLQ.
         """
         await self.dlq_queue.put(request)
+    
+    async def get_from_main(self):
+        """
+        Get a request from the main queue.
+        """
+        return await self.main_queue.get()
 
 
 async def exchange_facing_worker(url: str, api_key: str, queue_manager: QueueManager, logger: logging.Logger, benchmark: Benchmark):
     async with aiohttp.ClientSession() as session:
         rate_limiter = RateLimiter(PER_SEC_RATE, DURATION_MS_BETWEEN_REQUESTS)
         while True:
-            request: Request = await queue_manager.main_queue.get()
+            request: Request = await queue_manager.get_from_main()
             remaining_ttl = REQUEST_TTL_MS - (timestamp_ms() - request.create_time)
 
             if remaining_ttl <= 0:
@@ -269,7 +277,7 @@ def main():
     benchmark = Benchmark(configure_logger("stats"))
 
     # async task to generate requests
-    loop.create_task(generate_requests(main_queue))
+    loop.create_task(generate_requests(queue_manager.main_queue))
 
     # async task to requeue failed requests from DLQ
     loop.create_task(queue_manager.requeue_from_dlq(benchmark))
