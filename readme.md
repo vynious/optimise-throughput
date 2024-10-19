@@ -27,7 +27,7 @@ The benchmarking process is designed to measure the performance of the rate limi
      Every 5 seconds, the benchmark metrics are printed to provide real-time feedback on performance.
 
 
-## **Rate Limiter**
+## **Client Rate Limiter**
 
 ### **_Current Implementation_**
 ```python
@@ -83,7 +83,7 @@ Currently, the rate limiter has **two conditional statements** that trigger a br
        continue
    ```
 
-### **_Redundancy_**
+#### **_Redundancy_**
 Both checks serve to **regulate the rate of requests**, but they **overlap** in functionality:
 - The **Circular Buffer Check** is sufficient for **rate-limiting** because it tracks the **timing of all requests** and enforces the **1-second interval across 20 requests**.
 - The **Fixed Interval Check** adds unnecessary **rigidity** by enforcing a **fixed time interval** between consecutive requests, limiting **flexibility** for bursty traffic 
@@ -199,7 +199,7 @@ class RateLimiter:
 ```
 #### **Explanation of Adaptive Buffering**  
 
-This enhanced version introduces **adaptive buffering**, which fine-tunes the buffer size based on real-time **latency trends**. This ensures the system stays compliant with the server’s rate limits while minimizing unnecessary delays and maximizing throughput. 
+This enhanced version introduces **adaptive buffering**, which fine-tunes the buffer size based on real-time **latency trends**. This ensures the system stays compliant with the server's rate limits while minimizing unnecessary delays and maximizing throughput. 
 
 
 #### **Key Enhancements**  
@@ -238,5 +238,190 @@ With **adaptive buffering**, the system continuously **learns from recent trends
 
 ## **Queue**
 
+### **_Current Implementation_**
+```python
+async def exchange_facing_worker(url: str, api_key: str, queue: Queue, logger: logging.Logger):
+    rate_limiter = RateLimiter(PER_SEC_RATE, DURATION_MS_BETWEEN_REQUESTS)
+    async with aiohttp.ClientSession() as session:
+        while True:
+            request: Request = await queue.get()
+            remaining_ttl = REQUEST_TTL_MS - (timestamp_ms() - request.create_time)
+
+            if remaining_ttl <= 0:
+                logger.warning(f"Ignoring request {request.req_id} due to expired TTL.")
+                continue
+            try:
+                async with rate_limiter.acquire(timeout_ms=remaining_ttl):
+                    async with async_timeout.timeout(1.0):
+                        nonce = timestamp_ms()
+                        data = {'api_key': api_key, 'nonce': nonce, 'req_id': request.req_id}
+                        async with session.request('GET', url, data=data) as resp:
+                            json = await resp.json()
+                            if json['status'] == 'OK':
+                                logger.info(f"API response: status {resp.status}, resp {json}")
+                            else:
+                                logger.warning(f"API response: status {resp.status}, resp {json}")
+            except RateLimiterTimeout:
+                logger.warning(f"Ignoring request {request.req_id} due to TTL in rate limiter.")
+```
+
 ### **_Issue_**
-Currently the queue is generating more requests than the client can process, this results in expired TTL for the unprocessed requests stuck inside the queue. 
+
+The current implementation allows **more requests to be generated** than the client can process. This leads to **expired TTLs** for unprocessed requests in the queue. When the `remaining_ttl` drops below 0 or when there is a **request timeout**, the request is **dropped**. While this prevents the queue from becoming clogged, it also results in **wasted resources** and **lost requests** that could have been retried.
+
+### **_Solution: Queue Manager with Dead Letter Queue (DLQ)_**
+
+To improve request management, we introduce a **Queue Manager** that utilizes:
+1. **Main Queue:** Processes requests under normal operation.
+2. **Dead Letter Queue (DLQ):** Stores failed or timed-out requests for **retry** or further processing. This helps ensure that no valid request is wasted, even if it initially fails or exceeds its TTL.  
+
+This strategy improves **resilience** by providing better queue state management. Requests are **re-prioritized** from the DLQ, minimizing dropped requests and ensuring all requests receive multiple attempts before being discarded. In this scenario, **retry requests** are prioritized over new requests because we assume that each request is **time-sensitive** and must be processed promptly to ensure **timeliness**. 
+
+In the event that the request hits the max retry limit, we will store the `req_id` for manual processing and to prevent sending redundant request, as we can assume that these requests are invalid. 
+
+#### **How Do Retry Requests Get Prioritized Over New Requests?**
+- **Cooldown Window for New Requests:**  
+   When new requests are generated, a **short cooldown period** is introduced between them. This window allows the **Queue Manager** to **re-slot retry requests** into the queue before more new requests are created.
+
+- **Not a Strict Priority Queue:**  
+   While this is not a strict **priority queue** (where retry requests are inserted at the front), the **Queue Manager** ensures that **retry requests are slotted into the queue as soon as possible**, taking advantage of gaps in new request generation.
+
+#### **Why This Approach Works:**
+1. **Timely Execution:**  
+   Retry requests, being time-sensitive, get a chance to re-enter the queue before new requests accumulate, ensuring they don’t face further delays.
+
+2. **Reduced Request Starvation:**  
+   This method prevents **starvation** of retry requests, ensuring every request has a fair chance of being processed.
+
+3. **Balanced Processing:**  
+   The combination of **cooldown windows** for new requests and quick insertion of **retry requests** maintains a healthy balance between **fresh and delayed requests**. 
+
+This design ensures that **retry requests** are **handled promptly** without requiring a complex priority queue, optimizing for both **simplicity** and **timeliness**.
+
+### **_Lifecycle_**
+![New Sequence with Queue Manager](./img/uml_seq_diagram.png)
+
+### **_Improved Version_**
+
+```python
+# Queue Manager
+class QueueManager:
+    """
+    Manages the main queue and DLQ with priority handling.
+    """
+    
+    def __init__(self, main_queue: asyncio.Queue, dlq_queue: asyncio.Queue):
+        self.main_queue = main_queue  # main queue for normal requests
+        self.dlq_queue = dlq_queue    # DLQ for failed requests
+        self.__max_retry_count = 5  # max retry count for requests can be further adjusted
+        self.__graveyard = set(); # set to store dropped requests
+
+    async def add_request(self, request: Request):
+        """Adds a request to the main queue."""
+        await self.main_queue.put(request)
+
+    async def requeue_from_dlq(self, benchmark: Benchmark):
+        """
+        Prioritize DLQ requests by re-queuing them into the main queue.
+        
+        Prioritisation Logic: Because the generate_requests() has a delay 
+        between each generated requests, allowing DLQ requests to be re-queued as soon as possible.
+        """
+        max_retry = self.__max_retry_count
+        while True:
+            request: Request = await self.dlq_queue.get()  # get request from dlq
+    
+            if request.retry_count >= max_retry:
+                print(f"Request {request.req_id} has reached max retry count. sending to the graveyard.")
+                self.__graveyard.add(request.req_id) # store the really dead requests
+                print(f"Graveyard count: {len(self.__graveyard)}")
+                benchmark.record_failure()
+
+            else:
+                request.retry_count += 1 # increment retry count
+                request.update_create_time()  # refresh timestamp to avoid TTL issues
+                await self.main_queue.put(request)  # add back to the main queue
+            
+            self.dlq_queue.task_done()
+
+    async def add_to_dlq(self, request: Request):
+        """
+        Adds failed requests to the DLQ.
+        """
+        await self.dlq_queue.put(request)
+```
+
+```python
+# Updated exchange_facing_worker
+async def exchange_facing_worker(url: str, api_key: str, queue_manager: QueueManager, logger: logging.Logger, benchmark: Benchmark):
+    async with aiohttp.ClientSession() as session:
+        rate_limiter = RateLimiter(PER_SEC_RATE, DURATION_MS_BETWEEN_REQUESTS)
+        while True:
+            request: Request = await queue_manager.main_queue.get()
+            remaining_ttl = REQUEST_TTL_MS - (timestamp_ms() - request.create_time)
+
+            if remaining_ttl <= 0:
+              # now instead of dropping the request we add it to the dlq
+                await queue_manager.add_to_dlq(request)  # move to dlq for re-processing
+                queue_manager.main_queue.task_done()
+                continue
+
+            try:
+                async with rate_limiter.acquire(timeout_ms=remaining_ttl):
+                    async with async_timeout.timeout(1.0):
+                        data = {'api_key': api_key, 'nonce': timestamp_ms(), 'req_id': request.req_id}
+                        async with session.get(url, params=data) as resp:
+                            latency = timestamp_ms() - request.create_time
+                            json = await resp.json()
+                            if json['status'] == 'OK':
+                                logger.info(f"API response: status {resp.status}, resp {json}")
+                                benchmark.record_success(latency)
+                            else:
+                                logger.warning(f"API response: status {resp.status}, resp {json}")
+            except (RateLimiterTimeout, asyncio.TimeoutError):
+                logger.warning(f"Timeout for request {request.req_id}")
+                await queue_manager.add_to_dlq(request)  # retry via DLQ
+            finally:
+                queue_manager.main_queue.task_done()
+                
+```
+```python
+# updated main
+def main():
+    url = "http://127.0.0.1:9999/api/request"
+    loop = asyncio.get_event_loop()
+
+    main_queue = asyncio.Queue()  # main queue
+    dlq_queue = asyncio.Queue()   # DLQ for failed requests
+    
+    queue_manager = QueueManager(main_queue, dlq_queue)  # manage both queues
+
+    logger = configure_logger("debug")
+    benchmark = Benchmark(configure_logger("stats"))
+
+    # async task to generate requests
+    loop.create_task(generate_requests(main_queue))
+
+    # async task to requeue failed requests from DLQ back into the main queue through the queue manager
+    loop.create_task(queue_manager.requeue_from_dlq(benchmark))
+
+    # ayync task for each API key to run exchange_facing_worker
+    for api_key in VALID_API_KEYS:
+        loop.create_task(exchange_facing_worker(url, api_key, queue_manager, logger, benchmark))
+
+    # async task to print metrics 
+    loop.create_task(metrics_printer(benchmark))
+
+    # run the event loop
+    loop.run_forever()
+```
+
+### **Caveat: Slow Rate of Consuming Requests**
+
+We are still limited to only **5 API keys**, each associated with a worker consuming from the queue concurrently. This limitation results in a processing rate that is too slow, causing requests to expire (TTL exceeded) before the workers can handle them. The issue is further exacerbated by latencies on both the client and server sides due to rate limiting constraints, which worsens the rate at which requests are consumed from the queue. As a result, even though the Dead Letter Queue (DLQ) allows for retries, it doesn't resolve the underlying issue—the root cause remains unaddressed.
+
+To mitigate this problem, we can consider several workarounds:
+
+1. **Implementing Backpressure on `generate_requests()`:** By controlling the rate at which requests are generated based on the current state of the queue, we can prevent the system from being overwhelmed. This approach assumes that we are able to modify the `generate_requests()` function.
+
+2. **Implementing Multithreading:** By implementing multithreading, we are able to increase the rate of consumption of the request, resolving the issue of the expired requests TTL. 

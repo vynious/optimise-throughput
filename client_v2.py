@@ -122,7 +122,7 @@ async def metrics_printer(benchmark: Benchmark, interval=5):
 # end of benchmark region
 
 class Request:
-    def __init__(self, req_id, priority=1, retry_count=0):
+    def __init__(self, req_id, retry_count=0):
         self.req_id = req_id
         self.create_time = timestamp_ms()
         self.retry_count = retry_count  # Initialize retry count
@@ -188,33 +188,34 @@ class QueueManager:
     def __init__(self, main_queue: asyncio.Queue, dlq_queue: asyncio.Queue):
         self.main_queue = main_queue  # main queue for normal requests
         self.dlq_queue = dlq_queue    # DLQ for failed requests
-        self.__max_retry_count = 3  # max retry count for requests can be further adjusted
+        self.__max_retry_count = 5  # max retry count for requests can be further adjusted
         self.__graveyard = set(); # set to store dropped requests
 
     async def add_request(self, request: Request):
         """Adds a request to the main queue."""
         await self.main_queue.put(request)
 
-    async def requeue_from_dlq(self):
+    async def requeue_from_dlq(self, benchmark: Benchmark):
         """
         Prioritize DLQ requests by re-queuing them into the main queue.
         
-        Prioritisation Logic: Because the generate_requests() function has a delay 
-        between each generated requests, allowing DLQ requests to be re-queued first.
+        Prioritisation Logic: Because the generate_requests() has a delay between each generated requests, allowing DLQ requests to be re-queued as soon as possible.
         """
         max_retry = self.__max_retry_count
         while True:
             request: Request = await self.dlq_queue.get()  # get request from dlq
-            
+    
             if request.retry_count >= max_retry:
                 print(f"Request {request.req_id} has reached max retry count. sending to the graveyard.")
                 self.__graveyard.add(request.req_id) # store the really dead requests
-                print(f"Graveyard state: {self.__graveyard}")
+                print(f"Graveyard count: {len(self.__graveyard)}")
+                benchmark.record_failure()
+
             else:
                 request.retry_count += 1 # increment retry count
                 request.update_create_time()  # refresh timestamp to avoid TTL issues
                 await self.main_queue.put(request)  # add back to the main queue
-
+            
             self.dlq_queue.task_done()
 
     async def add_to_dlq(self, request: Request):
@@ -232,8 +233,6 @@ async def exchange_facing_worker(url: str, api_key: str, queue_manager: QueueMan
             remaining_ttl = REQUEST_TTL_MS - (timestamp_ms() - request.create_time)
 
             if remaining_ttl <= 0:
-                logger.warning(f"Ignoring request {request.req_id} due to expired TTL: {remaining_ttl}")
-                benchmark.record_failure()
                 await queue_manager.add_to_dlq(request)  # move to dlq for re-processing
                 queue_manager.main_queue.task_done()
                 continue
@@ -250,10 +249,8 @@ async def exchange_facing_worker(url: str, api_key: str, queue_manager: QueueMan
                                 benchmark.record_success(latency)
                             else:
                                 logger.warning(f"API response: status {resp.status}, resp {json}")
-                                benchmark.record_failure()
             except (RateLimiterTimeout, asyncio.TimeoutError):
                 logger.warning(f"Timeout for request {request.req_id}")
-                benchmark.record_failure()
                 await queue_manager.add_to_dlq(request)  # retry via DLQ
             finally:
                 queue_manager.main_queue.task_done()
@@ -275,7 +272,7 @@ def main():
     loop.create_task(generate_requests(main_queue))
 
     # async task to requeue failed requests from DLQ
-    loop.create_task(queue_manager.requeue_from_dlq())
+    loop.create_task(queue_manager.requeue_from_dlq(benchmark))
 
     # ayync task for each API key to run exchange_facing_worker
     for api_key in VALID_API_KEYS:
