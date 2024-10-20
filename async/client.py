@@ -89,7 +89,7 @@ def main():
     
     benchmark = Benchmark(stats)
     
-    queue_manager = QueueManager(main_queue, dlq_queue)  # manage both queues
+    queue_manager = QueueManager(main_queue, dlq_queue, stats)  # manage both queues
 
 
     # async task to generate requests
@@ -104,6 +104,7 @@ def main():
 
     # async task to print metrics 
     loop.create_task(benchmark.metrics_printer())
+    loop.create_task(queue_manager.monitor_queues())
 
     # run the event loop
     loop.run_forever()
