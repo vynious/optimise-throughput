@@ -32,14 +32,6 @@ class PerApiKeyState:
         self.prev_nonce = 0
         self.rate_limiter = RateLimiter(20)
         self.error_429s = 0
-        
-    # stlog 
-    def to_dict(self):
-        return {
-            'prev_nonce': self.prev_nonce,
-            'rate_limiter': self.rate_limiter.to_dict(),
-            'error_429s': self.error_429s
-        }
 
 
 VALID_API_KEYS = ['UT4NHL1J796WCHULA1750MXYF9F5JYA6',

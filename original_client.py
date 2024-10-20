@@ -25,10 +25,6 @@ VALID_API_KEYS = ['UT4NHL1J796WCHULA1750MXYF9F5JYA6',
 async def generate_requests(queue: Queue):
     """
     co-routine responsible for generating requests
-
-    :param queue:
-    :param logger:
-    :return:
     """
     curr_req_id = 0
     MAX_SLEEP_MS = 1000 / PER_SEC_RATE / len(VALID_API_KEYS) * 1.05 * 2.0

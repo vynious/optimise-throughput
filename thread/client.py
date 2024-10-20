@@ -48,21 +48,8 @@ def timestamp_ms() -> int:
 
 thread_local = threading.local()
 
-def get_unique_nonce():
-    if not hasattr(thread_local, 'nonce_counter'):
-        thread_local.nonce_counter = 0
-    thread_local.nonce_counter += 1
-    timestamp = timestamp_ms()
-    thread_id = threading.get_ident()
-    # Concatenate values to form a unique nonce
-    nonce_str = f"{timestamp}{thread_id}{thread_local.nonce_counter}"
-    # Convert to integer if needed
-    return int(nonce_str)
-
-
 class ThreadSafeQueue(Queue):
     pass  # thread safety from queue.Queue
-
 
 # same as non-threadsafe version but without asyncio.sleep
 def generate_requests_threadsafe(queue: ThreadSafeQueue):
@@ -74,6 +61,16 @@ def generate_requests_threadsafe(queue: ThreadSafeQueue):
         sleep_ms = random.randint(0, MAX_SLEEP_MS)
         time.sleep(sleep_ms / 1000.0)
 
+def get_unique_nonce():
+    if not hasattr(thread_local, 'nonce_counter'):
+        thread_local.nonce_counter = 0
+    thread_local.nonce_counter += 1
+    timestamp = timestamp_ms()
+    thread_id = threading.get_ident()
+    # Concatenate values to form a unique nonce
+    nonce_str = f"{timestamp}{thread_id}{thread_local.nonce_counter}"
+    # Convert to integer if needed
+    return int(nonce_str)
 
 def exchange_facing_worker(api_key, queue_manager: QueueManager, rate_limiter: ThreadSafeRateLimiter, logger, benchmark: Benchmark):
     """Process requests in a thread-safe way."""
@@ -121,17 +118,29 @@ def main():
     # rate limiter per API key
     rate_limiters = {key: ThreadSafeRateLimiter(PER_SEC_RATE, DURATION_MS_BETWEEN_REQUESTS) for key in VALID_API_KEYS}
 
-    # request generator in a thread
+    # request generator in a thread 
     request_generator_thread = threading.Thread(
         target=generate_requests_threadsafe,
         args=(main_queue,),
         daemon=True
     )
     request_generator_thread.start()
+        
+    # exchange-facing workers in threads
+    threads = []
+    for api_key in VALID_API_KEYS:
+        t = threading.Thread(
+            target=exchange_facing_worker,
+            args=(api_key, queue_manager, rate_limiters[api_key], logger, benchmark),
+            daemon=True
+        )
+        t.start()
+        threads.append(t)
 
     # DLQ requeue task in a thread
     dlq_requeue_thread = threading.Thread(
         target=queue_manager.requeue_from_dlq,
+        args=(benchmark,),
         daemon=True
     )
     dlq_requeue_thread.start()
@@ -149,19 +158,6 @@ def main():
         daemon=True
     )
     queue_monitor_thread.start()
-
-
-    # exchange-facing workers in threads
-    threads = []
-    for api_key in VALID_API_KEYS:
-        t = threading.Thread(
-            target=exchange_facing_worker,
-            args=(api_key, queue_manager, rate_limiters[api_key], logger, benchmark),
-            daemon=True
-        )
-        t.start()
-        threads.append(t)
-
 
     # Keep the main thread running
     try:

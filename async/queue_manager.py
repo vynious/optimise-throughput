@@ -37,6 +37,10 @@ class QueueManager:
     async def get_from_main(self):
         """Get a request from the main queue."""
         return await self.main_queue.get()
+    
+    async def add_to_dlq(self, request: Request):
+        """Add a failed request to the DLQ."""
+        return await self.dlq_queue.put(request)
 
     async def requeue_from_dlq(self, benchmark: benchmark.Benchmark):
         """Retry requests from the DLQ."""
@@ -44,7 +48,7 @@ class QueueManager:
             request: Request = await self.dlq_queue.get()
             if request.retry_count >= self.__max_retry_count:
                 self.__graveyard.add(request.req_id)
-                self.logger.info(f"Request {request.req_id} moved to the graveyard.")
+                print(f"Request {request.req_id} moved to the graveyard.")
                 benchmark.record_failure()
             else:
                 request.retry_count += 1
@@ -79,9 +83,9 @@ class QueueManager:
 
             # Check thresholds and log warnings if exceeded
             if main_queue_size > 1000:
-                self.logger.warning(f"Main queue size ({main_queue_size}) exceeds 1000!")
+                print(f"Main queue size ({main_queue_size}) exceeds 1000!")
             if dlq_size > 100:
-                self.logger.warning(f"DLQ size ({dlq_size}) exceeds 100!")
+                print(f"DLQ size ({dlq_size}) exceeds 100!")
 
             # Sleep for the specified interval (non-blocking)
             await asyncio.sleep(interval)

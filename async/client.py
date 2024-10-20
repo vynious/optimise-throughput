@@ -22,8 +22,8 @@ VALID_API_KEYS = [
     '8TY2F3KIL38T741G1UCBMCAQ75XU9F5O',
     '954IXKJN28CBDKHSKHURQIVLQHZIEEM9',
     'EUU46ID478HOO7GOXFASKPOZ9P91XGYS',
-    '46V5EZ5K2DFAGW85J18L50SGO25WJ5JE'
-]
+    '46V5EZ5K2DFAGW85J18L50SGO25WJ5JE',
+    ]
 
 
 async def generate_requests(queue: Queue):
@@ -59,7 +59,6 @@ async def exchange_facing_worker(
             remaining_ttl = REQUEST_TTL_MS - (timestamp_ms() - request.create_time)
 
             if remaining_ttl <= 0:
-                logger.warning(f"Request {request.req_id} expired. Moving to DLQ.")
                 await queue_manager.add_to_dlq(request)
                 queue_manager.main_queue.task_done()
                 continue
@@ -78,10 +77,8 @@ async def exchange_facing_worker(
                                 logger.warning(f"Request {request.req_id} failed with status {resp.status}.")
                                 await queue_manager.add_to_dlq(request)
             except (RateLimiterTimeout, asyncio.TimeoutError) as e:
-                logger.warning(f"Timeout for request {request.req_id}: {str(e)}")
                 await queue_manager.add_to_dlq(request)
             except aiohttp.ClientError as e:
-                logger.error(f"Network error for request {request.req_id}: {str(e)}")
                 await queue_manager.add_to_dlq(request)
             finally:
                 queue_manager.main_queue.task_done()
