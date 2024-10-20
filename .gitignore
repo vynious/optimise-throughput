@@ -1,3 +1,4 @@
 venv
 async-debug.log
 status.log
+**/__pycache__/

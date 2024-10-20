@@ -4,29 +4,6 @@
 
 This document presents a review and modification of the client code to maximize throughput while adhering to server-imposed rate limits. It outlines the issues identified in the existing implementation, the design choices made to address them, and the impact of these changes on performance. The focus is on refining the **rate limiter** and improving **queue management** to handle both bursty and constant-rate traffic efficiently.
 
-
-## Benchmarking the Client
-
-### Methodology
-
-Benchmarking is essential to measure the performance improvements accurately. The process involves:
-
-1. **Setup:**
-   - **API Keys:** Use **5 API keys**, each associated with a worker task sending requests concurrently.
-   - **Rate Limiter:** Implement a rate limiter to control request rates per API key.
-   - **Metrics Collection:** Record key performance metrics:
-     - Total successful requests
-     - Total failed requests
-     - Average latency per request
-     - Throughput (requests per second, TPS)
-
-2. **Execution:**
-   - **Request Generation:** Continuously generate requests and add them to a queue.
-   - **Request Processing:** Worker tasks fetch requests from the queue, pass them through the rate limiter, and send them to the server.
-   - **Metrics Tracking:** Use a benchmarking class to monitor request timings, success rates, and latencies.
-   - **Real-Time Feedback:** Log and print metrics every 5 seconds for monitoring.
-
-
 ## Enhancing the Rate Limiter
 
 ### Original Implementation
@@ -91,7 +68,26 @@ Currently, the rate limiter has **two conditional statements** that trigger a br
   - **Overlap:** Both checks aim to control request rates but the **Circular Buffer Check** alone suffices for rate limiting.
 
 ---
+### Benchmarking the client
 
+Benchmarking is essential to measure the performance improvements accurately. The process involves:
+
+1. **Setup:**
+   - **API Keys:** Use **5 API keys**, each associated with a worker task sending requests concurrently.
+   - **Rate Limiter:** Implement a rate limiter to control request rates per API key.
+   - **Metrics Collection:** Record key performance metrics:
+     - Total successful requests
+     - Total failed requests
+     - Average latency per request
+     - Throughput (requests per second, TPS)
+
+2. **Execution:**
+   - **Request Generation:** Continuously generate requests and add them to a queue.
+   - **Request Processing:** Worker tasks fetch requests from the queue, pass them through the rate limiter, and send them to the server.
+   - **Metrics Tracking:** Use a benchmarking class to monitor request timings, success rates, and latencies.
+   - **Real-Time Feedback:** Log and print metrics every 5 seconds for monitoring.
+
+---
 ### Proposed Solution
 
 **Remove the Fixed Interval Check**, allowing the **Circular Buffer Check** to regulate the request rate effectively, the **Fixed Interval Check** is redundant and adds unnecessary **context switching**. The **Circular Buffer Check** allows for more **adaptive rate limiting**, handling both **burst** and **constant-rate traffic** more efficiently. Example of why being able to handle both kinds of traffic can matter: 
@@ -277,6 +273,18 @@ async def exchange_facing_worker(url: str, api_key: str, queue: Queue, logger: l
 
 The current implementation allows **more requests to be generated** than the client can process. This leads to **expired TTLs** for unprocessed requests in the queue. When the `remaining_ttl` drops below 0 or when there is a **request timeout**, the request is **dropped**. While this prevents the queue from becoming clogged, it also results in **wasted resources** and **lost requests** that could have been retried.
 
+
+---
+### Benchmarking the client
+
+Using the below metrics we are able to get the current state of the DLQ and Main Queue to check if there is an existing bottleneck in processing the requests inside the queue, allowing us to check the risk of the requests inside the main queue timing out due to expired TTL. 
+
+  - **Queue Monitoring**: Track main queue and DLQ sizes, processing rates, and retry statistics.
+
+  - **Queue Sizes**: Monitor and log the sizes of the main queue and DLQ at regular intervals.
+
+  - **Graveyard Metrics**: Monitor the number of requests that exceed the maximum retry limit and are moved to the graveyard.
+
 ---
 ### Solution: Queue Manager with Dead Letter Queue (DLQ)
 
@@ -451,7 +459,7 @@ To increase the rate of request processing and reduce TTL expirations, multithre
 ### Changes to the current code
 
 1. Implement multithreading process to run:
-  - Request Generator (Assuming we are able to change the `generate_requests() function`, for multithreading we need to refactor the given `generate_requests()` and not use `asyncio`)
+  - Request Generator (Assuming we are able to change the `generate_requests()` function)
     ```python
     # request generator in a thread
     request_generator_thread = threading.Thread(
@@ -638,7 +646,10 @@ In contrast, the Threading client has **multiple threads running workers that ar
 | **Scalability**          | Scales well with asynchronous I/O but may bottleneck on event loop | Scales with the number of threads but limited by GIL and overhead |
 | **Complexity**           | Requires understanding of asynchronous programming paradigms    | Simpler threading model but must handle thread safety           |
 
----
-### Conclusion
 
-The Asyncio client achieves higher throughput due to its efficient handling of asynchronous I/O operations. However, its single-threaded event loop may become a bottleneck in processing requests from the queue promptly, leading to more TTL expirations. On the other hand, the Threading client benefits from multiple threads dequeuing requests concurrently, reducing TTL expirations but incurring additional overhead from thread management, resulting in slightly lower TPS.
+
+## Final Overview
+
+1. Asyncio 
+  - higher throughput 
+2. Multi-threading
