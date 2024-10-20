@@ -1,3 +1,6 @@
+from asyncio import Queue
+import logging
+import asyncio
 import time
 import asyncio
 import logging
@@ -6,11 +9,6 @@ from collections import deque
 from asyncio import Queue
 import benchmark
 from request import Request
-
-def timestamp_ms() -> int:
-    return int(time.time() * 1000)
-
-
 
 
 class QueueManager:

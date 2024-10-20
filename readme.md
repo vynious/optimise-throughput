@@ -782,7 +782,7 @@ In contrast, the Threading client has **multiple threads running workers that ar
 - **Asyncio** achieves **higher TPS** due to non-blocking I/O and reduced thread overhead but struggles with **queue management**, leading to **more TTL expirations**. 
 - **Threading** offers **better queue draining** because of parallel thread execution, resulting in **fewer expired requests**, but at the cost of slightly **lower TPS** due to thread scheduling overhead.
 
-## Final Overview
+## Overview
 
 ### Modifying the Original Client for Improved Performance
 To enhance throughput and optimize request management, the original client was modified by:
@@ -795,4 +795,26 @@ To enhance throughput and optimize request management, the original client was m
    - **Graveyard Tracking** was also implemented to handle requests that exceed the **maximum retry count**, ensuring manual handling and preventing repeated invalid requests.
    - With **prioritization of DLQ requests** over new requests, we ensured that time-sensitive retries are given preference without introducing complex priority queue logic.
 
-### Multithreading or Asynchronous
+### Multithreading or Asynchronous? 
+
+- **Trade-off Between Throughput and Request Delivery Guarantee:**
+  - In an **asynchronous (asyncio)** model, we prioritize **throughput** by leveraging non-blocking I/O operations. This allows us to achieve **higher TPS** (Transactions Per Second) by efficiently switching between multiple tasks. However, the downside is that **requests may accumulate** in the queue, resulting in **TTL expirations** if the event loop is saturated or if network latencies are high. This design favors **high-performance, bursty workloads**, such as high-frequency trading, but may compromise on ensuring all requests are successfully processed.
+  
+  - On the other hand, **multithreading** offers better **guarantee of request delivery** by running multiple threads concurrently, each working in parallel to dequeue and process requests from the shared queue. This prevents queue bloating and minimizes TTL expirations, ensuring that most requests are sent in a timely manner. However, the **thread overhead** and **context-switching latency** result in **lower overall throughput** compared to the asyncio model.
+
+- **Threading Client:**  
+  - Recommended when **reliability** is critical, and **each request must be processed successfully** within its TTL.  
+  - Best suited for **high-stakes transactional systems** (e.g., order books, payment gateways) where the cost of failed or dropped requests is high.  
+  - Although slightly lower in throughput (~8 TPS), the threading client ensures **faster queue draining** and **fewer TTL expirations** due to **parallel execution**.
+
+- **Asyncio Client:**  
+  - Optimal for scenarios where **throughput and performance** are prioritized over strict delivery guarantees.  
+  - With **regulated request generation** or **backpressure mechanisms**, the asyncio client can effectively handle **bursty workloads** and achieve **higher throughput** with minimal overhead.  
+  - Ideal for systems that need to **poll APIs frequently** (e.g., data ingestion services, real-time monitoring) and can tolerate occasional **TTL expirations**.
+
+---
+### Final Thoughts
+
+Based on the current **implementation and constraints**, I believe the **threading client** offers a better solution for this use case. Although it sacrifices around **~8 TPS** compared to the asyncio client, it provides a more **reliable rate of delivery**. In contrast, the **asyncio client**, while capable of achieving **higher throughput**, is more prone to **TTL expirations** and **request failures** due to the inherent challenges of **queue management and task scheduling** in asynchronous environments.
+
+However, if **request generation** can be **regulated**—either through **adaptive rate control** or **backpressure mechanisms**—the asyncio client becomes the more **optimal option**. This is because it handles **high-concurrency I/O-bound workloads** more efficiently and incurs less overhead compared to threading.
