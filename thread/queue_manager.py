@@ -21,12 +21,7 @@ class QueueManager:
         # Monitoring attributes
         self.main_queue_size_history = deque(maxlen=100)
         self.dlq_size_history = deque(maxlen=100)
-
-    def add_request(self, request: Request):
-        """Add a new request to the main queue."""
-        with self.lock:
-            self.main_queue.put(request)
-
+        
     def requeue_from_dlq(self, benchmark: Benchmark):
         """Requeue requests from DLQ to the main queue with priority."""
         while True:

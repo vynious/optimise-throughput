@@ -46,16 +46,20 @@ def timestamp_ms() -> int:
 
 
 
-async def exchange_facing_worker(url: str, api_key: str, queue_manager: QueueManager, logger: logging.Logger, benchmark: Benchmark):
+async def exchange_facing_worker(
+    url: str, api_key: str, queue_manager: QueueManager, 
+    logger: logging.Logger, benchmark: Benchmark
+):
     """Processes requests from the main queue."""
     async with aiohttp.ClientSession() as session:
         rate_limiter = RateLimiter(PER_SEC_RATE, DURATION_MS_BETWEEN_REQUESTS)
 
         while True:
-            request: Request = await queue_manager.main_queue.get()
+            request: Request = await queue_manager.get_from_main()
             remaining_ttl = REQUEST_TTL_MS - (timestamp_ms() - request.create_time)
 
             if remaining_ttl <= 0:
+                logger.warning(f"Request {request.req_id} expired. Moving to DLQ.")
                 await queue_manager.add_to_dlq(request)
                 queue_manager.main_queue.task_done()
                 continue
@@ -65,16 +69,22 @@ async def exchange_facing_worker(url: str, api_key: str, queue_manager: QueueMan
                     async with async_timeout.timeout(1.0):
                         data = {'api_key': api_key, 'nonce': timestamp_ms(), 'req_id': request.req_id}
                         async with session.get(url, params=data) as resp:
-                            latency = timestamp_ms() - request.create_time
-                            rate_limiter.record_latency(latency)
-                            benchmark.record_success(latency)
-                            logger.info(f"API response: status {resp.status}, resp {await resp.json()}")
-            except (RateLimiterTimeout, asyncio.TimeoutError):
-                logger.warning(f"Timeout for request {request.req_id}")
+                            if resp.status == 200:
+                                latency = timestamp_ms() - request.create_time
+                                rate_limiter.record_latency(latency)
+                                benchmark.record_success(latency)
+                                logger.info(f"API response: {await resp.json()}")
+                            else:
+                                logger.warning(f"Request {request.req_id} failed with status {resp.status}.")
+                                await queue_manager.add_to_dlq(request)
+            except (RateLimiterTimeout, asyncio.TimeoutError) as e:
+                logger.warning(f"Timeout for request {request.req_id}: {str(e)}")
+                await queue_manager.add_to_dlq(request)
+            except aiohttp.ClientError as e:
+                logger.error(f"Network error for request {request.req_id}: {str(e)}")
                 await queue_manager.add_to_dlq(request)
             finally:
                 queue_manager.main_queue.task_done()
-
                 
 def main():
     url = "http://127.0.0.1:9999/api/request"

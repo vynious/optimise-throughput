@@ -33,6 +33,10 @@ class QueueManager:
 
         self.main_queue_size_history = deque(maxlen=100)
         self.dlq_size_history = deque(maxlen=100)
+        
+    async def get_from_main(self):
+        """Get a request from the main queue."""
+        return await self.main_queue.get()
 
     async def requeue_from_dlq(self, benchmark: benchmark.Benchmark):
         """Retry requests from the DLQ."""
@@ -48,10 +52,6 @@ class QueueManager:
                 await self.main_queue.put(request)
 
             self.dlq_queue.task_done()
-
-    async def add_to_dlq(self, request: Request):
-        """Move failed requests to the DLQ."""
-        await self.dlq_queue.put(request)
 
     async def monitor_queues(self, interval: int = 5):
         """Monitor queue sizes and log statistics periodically."""
