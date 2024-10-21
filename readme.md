@@ -1,5 +1,40 @@
 # Maximizing Client Throughput
 
+## Table of Contents
+
+1. **[Getting Started](#getting-started)**  
+2. **[Folder Structure](#folder-structure)**  
+3. **[Introduction](#introduction)**  
+4. **[Benchmarking System](#benchmarking-system)**  
+   - [Key Metrics Tracked](#key-metrics-tracked)  
+   - [How the Benchmarking System Works](#how-the-benchmarking-system-works)  
+5. **[Enhancing the Rate Limiter](#enhancing-the-rate-limiter)**  
+   - [Original Implementation](#original-implementation)  
+   - [Identified Issues](#identified-issues)  
+   - [Proposed Solution](#proposed-solution)  
+   - [Observation: Performance Improvement](#observation-performance-improvement)  
+   - [Potential Issue: 429 Errors Due to Latency](#potential-issue-429-errors-due-to-latency)  
+   - [Improved Version: Adaptive Buffering](#improved-version-adaptive-buffering)  
+6. **[Improving Queue System](#improving-queue-system)**  
+   - [Current Implementation](#current-implementation)  
+   - [Solution: Queue Manager with Dead Letter Queue (DLQ)](#solution-queue-manager-with-dead-letter-queue-dlq)  
+   - [Lifecycle with Queue Manager](#lifecycle-with-queue-manager)  
+   - [Monitoring the Queue](#monitoring-the-queue)  
+7. **[Addressing the Root Cause: Bloating of the Main Queue](#addressing-the-root-cause-bloating-of-the-main-queue)**  
+8. **[Exploring Multithreading](#exploring-multithreading)**  
+   - [Rationale](#rationale)  
+   - [Changes to the Current Code](#changes-to-the-current-code)  
+9. **[Comparison Between Asyncio and Threading Client](#comparison-between-asyncio-and-threading-client)**  
+   - [Baseline Comparison](#baseline-of-comparison)  
+   - [Observation](#observation)  
+   - [Explanation](#explanation)  
+10. **[Overview and Modifications Summary](#overview)**  
+    - [Modifying the Original Client for Improved Performance](#modifying-the-original-client-for-improved-performance)  
+    - [Multithreading or Asynchronous?](#multithreading-or-asynchronous)  
+11. **[Final Thoughts](#final-thoughts)**  
+
+
+
 ## Getting Started
 
 ```
@@ -26,47 +61,39 @@ python3 thread/client.py
 
 ## Introduction
 
-This document presents a review and modification of the client code to maximize throughput while adhering to server-imposed rate limits. It outlines the issues identified in the existing implementation, the design choices made to address them, and the impact of these changes on performance. The focus is on refining the **rate limiter** and improving **queue management** to handle both bursty and constant-rate traffic efficiently.
+This document presents a review and modification of the client code to maximize throughput while adhering to server-imposed rate limits. It outlines the issues identified in the existing implementation, the design choices made to address them, and the impact of these changes on performance.
 
 ## Benchmarking System
 
 ### Key Metrics Tracked
 
 1. **Total Successful Requests**  
-   Tracks the total number of requests that were successfully processed.  
-   - **Why Important**: A high success rate indicates stability and efficient operation under load.
+   - **Why:** Indicates system stability and efficiency under load.
 
 2. **Total Failed Requests**  
-   Tracks the number of requests that failed due to timeouts or network issues.  
-   - **Why Important**: Helps identify patterns of failures and ensures proper handling of retries and backpressure.
+   - **Why:** Identifies network or timeout issues to ensure retries and prevent bottlenecks.
 
 3. **Average Latency (ms)**  
-   Measures the average response time for all successful requests.  
-   - **Why Important**: Low latency ensures faster response times and a better user experience.
+   - **Why:** Ensures fast response times and improves user experience.
 
-4. **Throughput (Requests per Second, TPS)**  
-   Calculates how many requests are processed per second.  
-   - **Why Important**: Critical for ensuring the system can handle high traffic without performance degradation.
+4. **Throughput (TPS)**  
+   - **Why:** Measures the system's capacity to handle high traffic without degradation.
 
 ---
 
 ### How the Benchmarking System Works
 
-- **Recording Successful Requests**:  
-  Every successful request is logged, along with its **latency** in milliseconds, to measure the average response time.
+- **Recording Successful/Failed Requests:**  
+  Logs successes with latencies and tracks failures to monitor stability.
 
-- **Recording Failed Requests**:  
-  Requests that fail (e.g., due to timeouts) are tracked to monitor the system's stability and identify bottlenecks.
+- **Calculating Average Latency:**  
+  Computes the mean latency of all successful requests to assess performance.
 
-- **Calculating Average Latency**:  
-  The latencies of all successful requests are stored, and the average is computed to reflect the system's response time.
+- **Calculating Throughput:**  
+  Measures successful requests per second from the start of the benchmark.
 
-- **Calculating Throughput**:  
-  Throughput is computed as the total number of successful requests divided by the elapsed time since the benchmarking started.
-
-- **Metrics Printing**:  
-  The system periodically prints all metrics (e.g., success/failure counts, throughput, and latency) to provide real-time feedback during execution.
-
+- **Metrics Printing:**  
+  Regularly prints key metrics for real-time feedback during execution.
 
 
 ## Enhancing the Rate Limiter
@@ -130,9 +157,6 @@ The current rate limiter has two conditional statements that introduce brief sle
 **Redundancy in Checks:**
 
 - Both checks aim to control request rates.
-- The **Fixed Interval Check** enforces a minimum time between consecutive requests.
-- The **Circular Buffer Check** ensures the request rate does not exceed the allowed number within a 1-second window.
-- The **Fixed Interval Check** is redundant because the **Circular Buffer Check** alone suffices for effective rate limiting.
 
 ---
 
@@ -162,7 +186,7 @@ After removing the **Fixed Interval Check**, throughput increased from **~74 TPS
   
 - Removing this check reduces **context switching and scheduling delays**, improving the efficiency of coroutine execution.
 
-- The **Circular Buffer Check** alone ensures requests are **properly spaced across a 1-second window**, allowing the client to handle both **burst and constant-rate traffic** without unnecessary pauses. This results in smoother, **more efficient request handling**. Furthermore the server side rate limiter also uses circular buffer to track the requests, adhering to the same rate limiting rules will be optimal.
+- The **Circular Buffer Check** alone ensures requests are **properly spaced across a 1-second window**, allowing the client to handle both **burst and constant-rate traffic** without unnecessary pauses. This results in smoother, **more efficient request handling**. Additionally, the server side rate limiter also uses circular buffer to track the requests, adhering to the same rate limiting rules will be optimal.
 
 ---
 ### Potential Issue: 429 Errors Due to Latency
@@ -203,9 +227,9 @@ class RateLimiter:
         self.__curr_idx = 0
 
         self.__latency_window = deque(maxlen=100)  # record of the last 100 latencies
-        self.__buffer = 50  # initial buffer (ms)
+        self.__buffer = 40  # initial buffer (ms)
         self.__min_buffer = 30  # min buffer (ms)
-        self.__max_buffer = 150  # max buffer (ms)
+        self.__max_buffer = 50  # max buffer (ms)
 
     def update_buffer(self):
         # calculate a moving average of the recent latencies
@@ -255,7 +279,7 @@ This enhanced version introduces **adaptive buffering**, which fine-tunes the bu
      ```python
      buffer = min(self.__max_buffer, max(self.__min_buffer, int(avg_latency * 1.1)))
      ```
-    - This ensures the buffer size adjusts proportionally to observed latency while staying within a **safe range** (30 ms to 150 ms).
+    - This ensures the buffer size adjusts proportionally to observed latency while staying within a **safe range** (30 ms to 50 ms based on server's `MAX_LATENCY_MS`).
 
 2. **Dynamic Sleep Calculation:**  
    - If the time between requests violates the rate limit, the **exact remaining time** needed to comply is calculated:
@@ -273,15 +297,12 @@ Even though the **maximum server-side latency** is known (e.g., `MAX_LATENCY_MS 
 
 With **adaptive buffering**, the system continuously **learns from recent trends** and dynamically adjusts the buffer to balance **performance and compliance**.
 
-
-
 ---
 
 ### Conclusion
 
-1. Keep the client's circular buffer checks to allow for more adaptive rate of sending requests and remove the fixed interval check. 
+1. **Remove** Fix Interval Checks and only **keeping** the Circular Buffer Checks
 2. Account for the server's latency and dynamically adjusts it for additional buffer when sending requests, to prevent rate limiting errors (429). 
-
 
 
 ## Improving Queue System
@@ -326,150 +347,23 @@ To improve request management, we introduce a **Queue Manager** that utilizes:
 1. **Main Queue:** Processes requests under normal operation.
 2. **Dead Letter Queue (DLQ):** Stores failed or timed-out requests for **retry** or further processing. This helps ensure that no valid request is wasted, even if it initially fails or exceeds its TTL.  
 
-This strategy improves **resilience** by providing better queue state management. Requests are **re-prioritized** from the DLQ, minimizing dropped requests and ensuring all requests receive multiple attempts before being discarded. In this scenario, **retry requests** are prioritized over new requests because we assume that each request is **time-sensitive** and must be processed promptly to ensure **timeliness**. 
-
-In the event that the request hits the max retry limit, we will store the `req_id` for manual processing and to prevent sending redundant request, as we can assume that these requests are invalid. 
+This strategy improves **resilience** by providing better queue state management. Requests are **re-prioritized** from the DLQ, minimizing dropped requests and ensuring all requests receive multiple attempts before being discarded. In the event that the request hits the max retry limit, we will store the `req_id` for manual processing and to prevent sending redundant request, as we can assume that these requests are invalid. 
 
 #### How Do Retry Requests Get Prioritized Over New Requests?
 - **Cooldown Window for New Requests:**  
    When new requests are generated, a **short cooldown period** is introduced between them. This window allows the **Queue Manager** to **re-slot retry requests** into the queue before more new requests are created.
 
 - **Not a Strict Priority Queue:**  
-   While this is not a strict **priority queue** (where retry requests are inserted at the front), the **Queue Manager** ensures that **retry requests are slotted into the queue as soon as possible**, taking advantage of gaps in new request generation.
-
-#### Why This Approach Works:
-1. **Timely Execution:**  
-   Retry requests, being time-sensitive, get a chance to re-enter the queue before new requests accumulate, ensuring they don't face further delays.
-
-2. **Reduced Request Starvation:**  
-   This method prevents **starvation** of retry requests, ensuring every request has a fair chance of being processed.
-
-3. **Balanced Processing:**  
-   The combination of **cooldown windows** for new requests and quick insertion of **retry requests** maintains a healthy balance between **fresh and delayed requests**. 
+   While this is not a strict **priority queue** (where retry requests are inserted at the front), the **Queue Manager** ensures that **retry requests are slotted into the queue as soon as possible**, taking advantage of gaps in new request generation. 
 
 This design ensures that **retry requests** are **handled promptly** without requiring a complex priority queue, optimizing for both **simplicity** and **timeliness**.
 
-
----
-### Improved Version: Using Queue Manager
-
-```python
-# Queue Manager
-class QueueManager:
-    """
-    Manages the main queue and DLQ with priority handling.
-    """
-    
-    def __init__(self, main_queue: asyncio.Queue, dlq_queue: asyncio.Queue):
-        self.main_queue = main_queue  # main queue for normal requests
-        self.dlq_queue = dlq_queue    # DLQ for failed requests
-        self.__max_retry_count = 5  # max retry count for requests can be further adjusted
-        self.__graveyard = set(); # set to store dropped requests
-
-    async def add_request(self, request: Request):
-        """Adds a request to the main queue."""
-        await self.main_queue.put(request)
-
-    async def requeue_from_dlq(self, benchmark: Benchmark):
-        """
-        Prioritize DLQ requests by re-queuing them into the main queue.
-        
-        Prioritisation Logic: Because the generate_requests() has a delay 
-        between each generated requests, allowing DLQ requests to be re-queued as soon as possible.
-        """
-        max_retry = self.__max_retry_count
-        while True:
-            request: Request = await self.dlq_queue.get()  # get request from dlq
-    
-            if request.retry_count >= max_retry:
-                print(f"Request {request.req_id} has reached max retry count. sending to the graveyard.")
-                self.__graveyard.add(request.req_id) # store the really dead requests
-                print(f"Graveyard count: {len(self.__graveyard)}")
-                benchmark.record_failure()
-
-            else:
-                request.retry_count += 1 # increment retry count
-                request.update_create_time()  # refresh timestamp to avoid TTL issues
-                await self.main_queue.put(request)  # add back to the main queue
-            
-            self.dlq_queue.task_done()
-
-    async def add_to_dlq(self, request: Request):
-        """
-        Adds failed requests to the DLQ.
-        """
-        await self.dlq_queue.put(request)
-```
-
-```python
-# Updated exchange_facing_worker
-async def exchange_facing_worker(url: str, api_key: str, queue_manager: QueueManager, logger: logging.Logger, benchmark: Benchmark):
-    async with aiohttp.ClientSession() as session:
-        rate_limiter = RateLimiter(PER_SEC_RATE, DURATION_MS_BETWEEN_REQUESTS)
-        while True:
-            request: Request = await queue_manager.main_queue.get()
-            remaining_ttl = REQUEST_TTL_MS - (timestamp_ms() - request.create_time)
-
-            if remaining_ttl <= 0:
-              # now instead of dropping the request we add it to the dlq
-                await queue_manager.add_to_dlq(request)  # move to dlq for re-processing
-                queue_manager.main_queue.task_done()
-                continue
-
-            try:
-                async with rate_limiter.acquire(timeout_ms=remaining_ttl):
-                    async with async_timeout.timeout(1.0):
-                        data = {'api_key': api_key, 'nonce': timestamp_ms(), 'req_id': request.req_id}
-                        async with session.get(url, params=data) as resp:
-                            latency = timestamp_ms() - request.create_time
-                            json = await resp.json()
-                            if json['status'] == 'OK':
-                                logger.info(f"API response: status {resp.status}, resp {json}")
-                                benchmark.record_success(latency)
-                            else:
-                                logger.warning(f"API response: status {resp.status}, resp {json}")
-            except (RateLimiterTimeout, asyncio.TimeoutError):
-                logger.warning(f"Timeout for request {request.req_id}")
-                await queue_manager.add_to_dlq(request)  # retry via DLQ
-            finally:
-                queue_manager.main_queue.task_done()
-                
-```
-```python
-# updated main
-def main():
-    url = "http://127.0.0.1:9999/api/request"
-    loop = asyncio.get_event_loop()
-
-    main_queue = asyncio.Queue()  # main queue
-    dlq_queue = asyncio.Queue()   # DLQ for failed requests
-    
-    queue_manager = QueueManager(main_queue, dlq_queue)  # manage both queues
-
-    logger = configure_logger("debug")
-    benchmark = Benchmark(configure_logger("stats"))
-
-    # async task to generate requests
-    loop.create_task(generate_requests(main_queue))
-
-    # async task to requeue failed requests from DLQ back into the main queue through the queue manager
-    loop.create_task(queue_manager.requeue_from_dlq(benchmark))
-
-    # ayync task for each API key to run exchange_facing_worker
-    for api_key in VALID_API_KEYS:
-        loop.create_task(exchange_facing_worker(url, api_key, queue_manager, logger, benchmark))
-
-    # async task to print metrics 
-    loop.create_task(metrics_printer(benchmark))
-
-    # run the event loop
-    loop.run_forever()
-```
+> [!NOTE]
+> See implementation at `async/queue_manager.py`
 
 ---
 ### Lifecycle with Queue Manager
 ![New Sequence with Queue Manager](./img/uml_seq_diagram.png)
-
 
 ---
 ### Monitoring the Queue 
@@ -482,7 +376,6 @@ Using the below metrics we are able to get the current state of the DLQ and Main
 
   - **Graveyard Metrics**: Monitor the number of requests that exceed the maximum retry limit and are moved to the graveyard.
 
-Currently `rate of generating request > rate of dequeing the request`, this causes bloating of the queue causing TTL expiry. From below you can see the Queue Sizes of Main is increasing.
 
 ```
 --- Accumulated Benchmark Metrics ---
@@ -516,9 +409,11 @@ Currently `rate of generating request > rate of dequeing the request`, this caus
 
 
 ---
-### Caveat: Request Generating Rate > Request Consumption Rate
+### Addressing the Root Cause: Bloating of the Main Queue
 
-We are still limited to only **5 API keys**, each associated with a worker consuming from the queue concurrently. This limitation results in a processing rate that is too slow, causing requests to expire (TTL exceeded) before the workers can handle them. The issue is further exacerbated by latencies on both the client and server sides due to rate limiting constraints, which worsens the rate at which requests are consumed from the queue. As a result, even though the Dead Letter Queue (DLQ) allows for retries, it doesn't resolve the underlying issue—the root cause remains unaddressed.
+- Currently, the **rate of generating requests exceeds the rate of dequeuing requests**, causing **queue bloating** and leading to **TTL expirations**. We are limited to only **5 API keys**, each associated with a worker consuming requests from the queue. This restriction results in a processing rate that is too slow to handle the incoming traffic effectively, causing requests to expire before being processed. 
+
+- The situation is further exacerbated by **latencies on both the client and server sides** due to rate limiting constraints, which slow down the consumption of requests from the queue. While the **Dead Letter Queue (DLQ)** allows failed requests to be retried, **it does not address the root issue**: the imbalance between the rate of request generation and processing.
 
 To mitigate this problem, we can consider several workarounds:
 
@@ -531,206 +426,36 @@ To mitigate this problem, we can consider several workarounds:
         continue
     ```
 
-2. **Implementing Multithreading:** By implementing multithreading, we are able to increase the rate of consumption of the request, resolving the issue of the expired requests TTL. See below for alternative version of running the client.
+2. **Implementing Multithreading:** By implementing multithreading, we are able to better manage the rate of consumption of the request, resolving the issue of the expired requests TTL. 
 
 
 ## Exploring Multithreading 
 
 ### Rationale
 
-To increase the rate of request processing and reduce TTL expirations, multithreading can be introduced. When have multiple workers accessing the same queue we can increase the deque rate of the requests and prevent overloading the main queue.
-
-- **Simultaneous Dequeuing:**  
-  Multiple threads can perform `get()` operations in **parallel**, each grabbing a request from the queue almost immediately as soon as it arrives. This reduces the likelihood of **requests piling up** in the queue.  
-  **Outcome:** The queue is likely to stay relatively empty most of the time since all threads try to grab requests as soon as they’re available.
+To **manage the rate of request processing** and **reduce TTL expirations**, multithreading can be introduced. When have multiple workers accessing the same queue we can increase the deque rate of the requests and prevent overloading the main queue.
 
 ---
 ### Changes to the current code
 
 1. Implement multithreading process to run:
-  - Request Generator (Assuming we are able to change the `generate_requests()` function)
-    ```python
-    # request generator in a thread
-    request_generator_thread = threading.Thread(
-        target=generate_requests_threadsafe,
-        args=(main_queue,),
-        daemon=True
-    )
-    request_generator_thread.start()
+    - Request Generator (Assuming we are able to change the `generate_requests()` function)
+    - Metrics Printing
+    - Exchange Facing Workers
 
-    ```
-  - DLQ Requeue
-    ```python
-    # DLQ requeue task in a thread
-    dlq_requeue_thread = threading.Thread(
-        target=queue_manager.requeue_from_dlq,
-        daemon=True
-    )
-    dlq_requeue_thread.start()
-    ```
-  - Metrics Printing
-    ```python
-    # metrics printer in a thread
-    metrics_thread = threading.Thread(
-        target=metrics_printer,
-        args=(benchmark,),
-        daemon=True
-    )
-    metrics_thread.start()
-    ```
-  - Exchange Facing Workers
-    ```python
-    threads = []
-    for api_key in VALID_API_KEYS:
-        t = threading.Thread(
-            target=exchange_facing_worker,
-            args=(api_key, queue_manager, rate_limiters[api_key], logger, benchmark),
-            daemon=True
-        )
-        t.start()
-        threads.append(t)
-    ```
 2. Implement Locking on Shared Resources
-  - Queue Manager. Since all the workers are sharing the same queue, there will be resource contention on the graveyard. 
-    ```python
-    class QueueManager:
-        def __init__(self, main_queue: Queue, dlq_queue: Queue, logger: logging.Logger):
-            # queues are already thread safe
-            self.main_queue = main_queue
-            self.dlq_queue = dlq_queue
-            self.logger = logger
-            self.max_retry_count = 5
-            self.graveyard = set()
-            self.lock = threading.Lock()
-            
-            # Monitoring attributes
-            self.main_queue_size_history = deque(maxlen=100)
-            self.dlq_size_history = deque(maxlen=100)
-            
-        def requeue_from_dlq(self, benchmark: Benchmark):
-            """Requeue requests from DLQ to the main queue with priority."""
-            while True:
-                request: Request = self.dlq_queue.get()
-                if request.retry_count > self.max_retry_count:
-                    with self.lock: # lock on the shared graveyard
-                        self.graveyard.add(request.req_id)
-                    print(f"Request {request.req_id} moved to graveyard.")
-                    benchmark.record_failure()
-                else:
-                    request.retry_count += 1
-                    request.update_create_time()
-                    self.main_queue.put(request)
-                
-                self.dlq_queue.task_done()
+    - Queue Manager - Since all the workers are sharing the same queue, there will be resource contention on the graveyard. 
+    - Rate Limiter (Thread safe) - Assuming we are running multiple threads for the same API Key. 
 
-        def add_to_dlq(self, request: Request):
-            """Add a failed request to the DLQ."""
-            self.dlq_queue.put(request)
-        
-        def get_from_main(self):
-            """Get a request from the main queue."""
-            return self.main_queue.get()
+3. Getting Unique Nonces when creating request.
+    -  This is needed because currently the nonce used is timestamp-based, however there will potentially be multiple requests being sent at the same time resulting in bad nonces. 
 
-        def monitor_queues(self, interval=5):
-            """Monitor queue sizes and log statistics."""
-            while True:
-                main_queue_size = self.main_queue.qsize()
-                dlq_size = self.dlq_queue.qsize()
-                graveyard_size = len(self.graveyard)
-                
-                self.main_queue_size_history.append(main_queue_size)
-                self.dlq_size_history.append(dlq_size)
-                
-                self.logger.info(f"Queue Sizes - Main: {main_queue_size}, DLQ: {dlq_size}, Graveyard: {graveyard_size}")
-                
-                avg_main_size = sum(self.main_queue_size_history) / len(self.main_queue_size_history)
-                avg_dlq_size = sum(self.dlq_size_history) / len(self.dlq_size_history)
-                
-                self.logger.info(f"Average Queue Sizes - Main: {avg_main_size:.2f}, DLQ: {avg_dlq_size:.2f}")
-                
-                if main_queue_size > 1000:
-                    print(f"Main queue size ({main_queue_size}) exceeds 1000!")
-                if dlq_size > 100:
-                    print(f"DLQ size ({dlq_size}) exceeds 100!")
-                
-                time.sleep(interval)
-
-        def get_queue_stats(self):
-            """Get current queue statistics."""
-            return {
-                'main_queue_size': self.main_queue.qsize(),
-                'dlq_size': self.dlq_queue.qsize(),
-                'avg_main_queue_size': sum(self.main_queue_size_history) / len(self.main_queue_size_history) if self.main_queue_size_history else 0,
-                'avg_dlq_size': sum(self.dlq_size_history) / len(self.dlq_size_history) if self.dlq_size_history else 0,
-                'graveyard_size': len(self.graveyard)
-            }
-    ```
-  - Rate Limiter (Thread safe). Assuming we are running multiple threads for the same API Key. 
-    ```python
-    class ThreadSafeRateLimiter:
-      def __init__(self, per_second_rate, min_duration_ms_between_requests):
-          self.per_second_rate = per_second_rate
-          self.request_times = [0] * per_second_rate
-          self.min_duration_ms_between_requests = min_duration_ms_between_requests
-          self.curr_idx = 0
-          self.lock = threading.Lock()
-          
-          self.latency_window = deque(maxlen=100)  # record of the last 100 latencies
-          self.buffer = 40  # initial buffer (ms)
-          self.min_buffer = 30  # min buffer (ms)
-          self.max_buffer = 50  # max buffer (ms)
-          
-          
-      def update_buffer(self):
-          # calculate a moving average of the recent latencies
-          if len(self.latency_window) > 0:
-              avg_latency = sum(self.latency_window) / len(self.latency_window)
-              # adjust buffer based on average latency
-              self.buffer = min(self.max_buffer, max(self.min_buffer, int(avg_latency * 1.1)))
-
-      def record_latency(self, latency):
-          self.latency_window.append(latency)
-          self.update_buffer()
-
-      @contextlib.contextmanager
-      def acquire(self, timeout_ms=0):
-          enter_ms = timestamp_ms()
-          buffer = self.buffer
-          initial_buffer = self.min_duration_ms_between_requests * self.per_second_rate
-          
-          while True:
-              now = timestamp_ms()
-              if now - enter_ms > timeout_ms > 0:
-                  raise RateLimiterTimeout()
-
-              # sleep the exact remaining time to the next second
-              sleep_time = (initial_buffer + buffer - (now - self.request_times[self.curr_idx])) / 1000
-              
-              with self.lock:
-                  if now - self.request_times[self.curr_idx] >= initial_buffer + buffer:
-                      self.request_times[self.curr_idx] = now
-                      self.curr_idx = (self.curr_idx + 1) % self.per_second_rate
-                      yield
-                      return
-
-              time.sleep(sleep_time)
-    ```
-  3. Getting Unique Nonces when creating request. This is needed because currently the nonce used is timestamp-based, however there will potentially be multiple requests being sent at the same time resulting in bad nonces. 
-      ```python
-      thread_local = threading.local()
-      def get_unique_nonce():
-        if not hasattr(thread_local, 'nonce_counter'):
-            thread_local.nonce_counter = 0
-        thread_local.nonce_counter += 1
-        timestamp = timestamp_ms()
-        thread_id = threading.get_ident()
-        # concat values to form a unique nonce
-        nonce_str = f"{timestamp}{thread_id}{thread_local.nonce_counter}"
-        # convert to integer if needed
-        return int(nonce_str)
-      ```
+> [!NOTE]
+> See `thread` folder for implementation
 
 ## Comparison between Asyncio and Threading Client
+
+This is the comparsion between my current implementation of the client using asynchronous and multi-threading. 
 
 ### Baseline of comparison
 
@@ -748,56 +473,134 @@ To increase the rate of request processing and reduce TTL expirations, multithre
 
 ---
 ### Observation
-
-The **Asyncio client (~85 TPS)** outperforms the **Threading client (~78 TPS)** in terms of throughput (TPS). This higher throughput is primarily due to asyncio’s ability to efficiently handle concurrent I/O-bound operations. However, **more requests accumulate inside the queue in the Asyncio client**, leading to **TTL expirations**. In contrast, the Threading client shows **near-zero expired requests** because multiple threads are actively dequeuing requests, ensuring timely processing.
-
 ```
 ASYNCIO STATS
 --- Accumulated Benchmark Metrics ---
-2024-10-20 16:39:41,405 - stats - INFO - Elapsed Time: 10.00 seconds
-2024-10-20 16:39:41,405 - stats - INFO - Total Successful Requests: 849
-2024-10-20 16:39:41,405 - stats - INFO - Total Failed Requests: 0
-2024-10-20 16:39:41,405 - stats - INFO - Total Throughput: 84.88 req/sec
-2024-10-20 16:39:41,405 - stats - INFO - Average Latency: 288.88 ms
-2024-10-20 16:39:41,405 - stats - INFO - Queue Sizes - Main: 61, DLQ: 0, Graveyard: 0
-2024-10-20 16:39:41,405 - stats - INFO - Average Queue Sizes - Main: 26.00, DLQ: 0.00
+2024-10-20 22:09:30,164 - stats - INFO - Elapsed Time: 15.00 seconds
+2024-10-20 22:09:30,164 - stats - INFO - Total Successful Requests: 1253
+2024-10-20 22:09:30,164 - stats - INFO - Total Failed Requests: 0
+2024-10-20 22:09:30,164 - stats - INFO - Total Throughput: 83.51 req/sec
+2024-10-20 22:09:30,164 - stats - INFO - Average Latency: 587.35 ms
+2024-10-20 22:09:30,164 - stats - INFO - Queue Sizes - Main: 120, DLQ: 0, Graveyard: 0
+2024-10-20 22:09:30,164 - stats - INFO - Average Queue Sizes - Main: 55.75, DLQ: 0.00
+2024-10-20 22:09:35,165 - stats - INFO - 
+--- Accumulated Benchmark Metrics ---
+2024-10-20 22:09:35,165 - stats - INFO - Elapsed Time: 20.00 seconds
+2024-10-20 22:09:35,165 - stats - INFO - Total Successful Requests: 1680
+2024-10-20 22:09:35,165 - stats - INFO - Total Failed Requests: 9
+2024-10-20 22:09:35,165 - stats - INFO - Total Throughput: 83.98 req/sec
+2024-10-20 22:09:35,165 - stats - INFO - Average Latency: 700.96 ms
+2024-10-20 22:09:35,165 - stats - INFO - Queue Sizes - Main: 131, DLQ: 0, Graveyard: 9
+2024-10-20 22:09:35,165 - stats - INFO - Average Queue Sizes - Main: 70.80, DLQ: 0.00
+2024-10-20 22:09:40,166 - stats - INFO - 
+--- Accumulated Benchmark Metrics ---
+2024-10-20 22:09:40,166 - stats - INFO - Elapsed Time: 25.01 seconds
+2024-10-20 22:09:40,166 - stats - INFO - Total Successful Requests: 2102
+2024-10-20 22:09:40,166 - stats - INFO - Total Failed Requests: 13
+2024-10-20 22:09:40,166 - stats - INFO - Total Throughput: 84.06 req/sec
+2024-10-20 22:09:40,166 - stats - INFO - Average Latency: 769.45 ms
+2024-10-20 22:09:40,166 - stats - INFO - Queue Sizes - Main: 136, DLQ: 0, Graveyard: 13
+2024-10-20 22:09:40,166 - stats - INFO - Average Queue Sizes - Main: 81.67, DLQ: 0.00
 ```
 ```
 THREADING STATS
 --- Accumulated Benchmark Metrics ---
-2024-10-20 16:45:24,437 - stats - INFO - Elapsed Time: 35.04 seconds
-2024-10-20 16:45:24,437 - stats - INFO - Total Successful Requests: 2732
-2024-10-20 16:45:24,437 - stats - INFO - Total Failed Requests: 0
-2024-10-20 16:45:24,437 - stats - INFO - Total Throughput: 77.97 req/sec
-2024-10-20 16:45:24,437 - stats - INFO - Average Latency (Total): 83.14 ms
-2024-10-20 16:45:29,440 - stats - INFO - Queue Sizes - Main: 0, DLQ: 0, Graveyard: 0
-2024-10-20 16:45:29,440 - stats - INFO - Average Queue Sizes - Main: 1.44, DLQ: 0.00
+2024-10-21 20:38:29,345 - stats - INFO - Elapsed Time: 15.00 seconds
+2024-10-21 20:38:29,345 - stats - INFO - Total Successful Requests: 1163
+2024-10-21 20:38:29,345 - stats - INFO - Total Failed Requests: 0
+2024-10-21 20:38:29,345 - stats - INFO - Total Throughput: 77.45 req/sec
+2024-10-21 20:38:29,345 - stats - INFO - Average Latency (Total): 76.11 ms
+2024-10-21 20:38:34,349 - stats - INFO - Queue Sizes - Main: 0, DLQ: 0, Graveyard: 0
+2024-10-21 20:38:34,350 - stats - INFO - Average Queue Sizes - Main: 0.60, DLQ: 0.00
+2024-10-21 20:38:34,349 - stats - INFO - 
+--- Accumulated Benchmark Metrics ---
+2024-10-21 20:38:34,350 - stats - INFO - Elapsed Time: 20.00 seconds
+2024-10-21 20:38:34,350 - stats - INFO - Total Successful Requests: 1543
+2024-10-21 20:38:34,350 - stats - INFO - Total Failed Requests: 0
+2024-10-21 20:38:34,350 - stats - INFO - Total Throughput: 77.07 req/sec
+2024-10-21 20:38:34,350 - stats - INFO - Average Latency (Total): 74.29 ms
+2024-10-21 20:38:39,352 - stats - INFO - Queue Sizes - Main: 3, DLQ: 0, Graveyard: 0
+2024-10-21 20:38:39,352 - stats - INFO - Average Queue Sizes - Main: 1.00, DLQ: 0.00
+2024-10-21 20:38:39,356 - stats - INFO - 
+--- Accumulated Benchmark Metrics ---
+2024-10-21 20:38:39,356 - stats - INFO - Elapsed Time: 25.00 seconds
+2024-10-21 20:38:39,356 - stats - INFO - Total Successful Requests: 1939
+2024-10-21 20:38:39,356 - stats - INFO - Total Failed Requests: 0
+2024-10-21 20:38:39,356 - stats - INFO - Total Throughput: 77.48 req/sec
+2024-10-21 20:38:39,356 - stats - INFO - Average Latency (Total): 75.12 ms
+2024-10-21 20:38:44,356 - stats - INFO - Queue Sizes - Main: 1, DLQ: 0, Graveyard: 0
+2024-10-21 20:38:44,356 - stats - INFO - Average Queue Sizes - Main: 1.00, DLQ: 0.00
+2024-10-21 20:38:44,361 - stats - INFO - 
 ```
 
-In contrast, the Threading client has **multiple threads running workers that are dequeuing the requests from the same queue simultaneously**. This concurrent dequeuing allows the Threading client to process requests more quickly from the queue, thereby **reducing the number of requests that expire due to TTL**. As a result, the Threading client, despite having a slightly lower overall TPS, is more effective at preventing request timeouts caused by TTL expiration, and as shown there are more requests inside the asyncio client's queue than the threading client's queue. Furthermore the locking mechanism on the thread safe Queue will help to throttle the rate that requests are added, if the `get` is acquired the `put_nowait` cannot occur likewise for the flip side.
+The **Asyncio client (~85 TPS)** outperforms the **Threading client (~78 TPS)** in terms of throughput (TPS). This higher throughput is primarily due to asyncio's ability to efficiently handle concurrent I/O-bound operations. However, **more requests accumulate inside the queue in the Asyncio client**, leading to **TTL expirations**. 
+
+In contrast, the Threading client has **multiple threads running workers that are dequeuing the requests from the same queue simultaneously**. Furthermore the locking mechanism on the Queue will help to throttle the rate that requests are added, if the `get` is acquired the `put_nowait` cannot occur likewise for the other side.
 
 ---
+#### Explanation
 
-### Explanation of the Observed Behavior
+1. **Concurrency Models: Cooperative vs. Preemptive Multitasking**
 
-1. **Cooperative Multitasking in Asyncio vs Preemptive Multitasking in Threads:**
-   - **Asyncio** leverages **cooperative multitasking**, where each task voluntarily yields control when it reaches an `await`. If multiple coroutines are waiting on I/O operations, the event loop manages them efficiently. However, **if a coroutine takes longer than expected**, it can delay others from executing, leaving requests waiting in the queue longer.
-   - **Threading** uses **preemptive multitasking**, which allows multiple threads to run independently and access shared resources like the queue. This ensures **faster dequeuing of requests**, reducing TTL expirations.
+   - **Asyncio (Cooperative Multitasking):**
+     - Utilizes a **single event loop** to manage all coroutines.
+     - Coroutines yield control voluntarily using `await`.
+     - **Limitation:** If a coroutine takes longer than expected or fails to yield, it can **block the event loop**, delaying other coroutines.
+     - **Impact:** Requests wait longer in the queue, increasing the likelihood of TTL expirations.
 
-2. **Queue Drain Speed and TTL Expirations:**
-   - **Threading:** With multiple threads dequeuing requests simultaneously, the **queue drains quickly**, minimizing the number of expired requests. This allows more requests to be processed within their TTL.
-   - **Asyncio:** Since **only one event loop** is responsible for dequeuing and scheduling tasks, the processing can become **delayed if too many coroutines are scheduled**, leading to **more TTL expirations**. This is compounded by task-switching latency when the event loop switches between multiple tasks.
+   - **Threading (Preemptive Multitasking):**
+     - Employs **multiple threads** that the operating system schedules independently.
+     - Threads can run in parallel and are preempted as needed.
+     - **Benefit:** Even if one thread is blocked (e.g., due to I/O), other threads continue processing.
+     - **Impact:** Requests are dequeued and processed promptly, reducing TTL expirations.
 
-3. **Network I/O Latency and Blocking Scenarios:**
-   - **Asyncio** handles I/O-bound operations well by yielding control during network requests. However, **if the event loop gets blocked or a coroutine hogs execution**, other requests remain unprocessed, causing them to expire.
-   - **Threading** provides better resilience in such scenarios since multiple threads can operate independently, ensuring the **queue is continuously drained** even if some threads are blocked by network delays.
+2. **Queue Drain Speed and TTL Expirations**
 
-4. **Task Switching Overhead in Asyncio:**
-   - In asyncio, frequent **task switching** between coroutines introduces slight overhead. If the event loop is saturated with tasks, the switching can add latency, preventing timely queue draining. This explains the accumulation of requests inside the asyncio queue compared to the threading version.
+   - **Asyncio Client:**
+     - **Single Event Loop Bottleneck:** Under heavy load, the event loop may become overwhelmed.
+     - **Result:** Queue grows as requests are generated faster than they are processed.
+     - **Consequence:** Increased **TTL expirations** due to delayed processing.
 
+   - **Threading Client:**
+     - **Concurrent Dequeuing:** Multiple threads access and dequeue from the queue simultaneously.
+     - **Result:** Queue remains small as requests are processed quickly.
+     - **Consequence:** **Fewer TTL expirations** since requests are handled within their valid time frame.
+
+3. **Network I/O Latency and Blocking Scenarios**
+
+   - **Asyncio Client:**
+     - **Event Loop Sensitivity:** If a coroutine encounters network latency and doesn't yield promptly, it can block the event loop.
+     - **Impact:** Other coroutines are prevented from running, delaying request processing.
+     - **Result:** Accumulation of requests in the queue and potential TTL expirations.
+
+   - **Threading Client:**
+     - **Independent Threads:** A thread waiting on network I/O doesn't block other threads.
+     - **Impact:** Other threads continue to process requests without interruption.
+     - **Result:** Continuous queue draining and timely request handling.
+
+4. **Task Switching Overhead in Asyncio**
+
+   - **Asyncio Client:**
+     - **Context Switching Overhead:** Frequent switching between many coroutines can introduce latency.
+     - **Event Loop Saturation:** High task-switching demands can overwhelm the event loop.
+     - **Result:** Delays in processing coroutines, leading to more requests accumulating in the queue.
+
+   - **Threading Client:**
+     - **OS-Level Scheduling:** Threads are managed by the operating system, which can efficiently handle context switching between threads.
+     - **Reduced Overhead:** Although threads have their own overhead, the impact on queue processing is less pronounced.
+     - **Result:** Maintains a low queue size with minimal TTL expirations.
+
+---
 #### Summary
-- **Asyncio** achieves **higher TPS** due to non-blocking I/O and reduced thread overhead but struggles with **queue management**, leading to **more TTL expirations**. 
-- **Threading** offers **better queue draining** because of parallel thread execution, resulting in **fewer expired requests**, but at the cost of slightly **lower TPS** due to thread scheduling overhead.
+
+- **Asyncio Client:**
+  - **Pros:** Higher throughput due to efficient non-blocking I/O operations.
+  - **Cons:** Struggles with queue management under heavy load, leading to more TTL expirations as requests wait longer to be processed.
+
+- **Threading Client:**
+  - **Pros:** Better at quickly draining the queue with multiple threads, resulting in timely processing and fewer TTL expirations.
+  - **Cons:** Slightly lower throughput due to the overhead associated with thread management and context switching.
+
 
 ## Overview
 
