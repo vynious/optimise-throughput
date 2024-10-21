@@ -1,5 +1,22 @@
 # Maximizing Client Throughput
 
+## Getting Started
+
+```
+pip install requirements.txt
+
+# might need to restart the server each time a client is ran.
+
+# run the server
+python3 original_server.py
+
+# run async client
+python3 async/client.py
+
+# run multithreaded client
+python3 thread/client.py
+```
+
 ## Folder Structure
 
 - /async - folder for asyncio client
@@ -92,18 +109,18 @@ class RateLimiter:
 ---
 ### Identified Issues
 
-Currently, the rate limiter has **two conditional statements** that trigger a brief **sleep** with the goal of controlling the rate at which requests are sent:
+The current rate limiter has two conditional statements that introduce brief sleeps to control the rate at which requests are sent:
 
-1. **Fixed Interval Check**:  
-   Ensures that the time interval between consecutive requests does not fall below a predefined minimum (`min_duration_ms_between_requests`).
+1. **Fixed Interval Check:** Ensures that the time interval between consecutive requests does not fall below a predefined minimum (`min_duration_ms_between_requests`).
+
    ```python
    if now - self.__last_request_time <= self.__min_duration_ms_between_requests:
        await asyncio.sleep(0.001)
        continue
    ```
 
-2. **Circular Buffer Check**:  
-   Ensures that the time difference between the current request and the request that was sent 20 positions earlier is **at least 1 second**.
+2. **Circular Buffer Check:** Ensures that no more than a specified number of requests are sent within any 1-second window.
+
    ```python
    if now - self.__request_times[self.__curr_idx] <= 1000:
        await asyncio.sleep(0.001)
@@ -111,24 +128,24 @@ Currently, the rate limiter has **two conditional statements** that trigger a br
    ```
 
 **Redundancy in Checks:**
-  - **Fixed Interval Check:** Enforces a minimum time between consecutive requests.
-  - **Circular Buffer Check:** Ensures no more than a specified number of requests are sent within any 1-second window.
-  - **Overlap:** Both checks aim to control request rates but the **Circular Buffer Check** alone suffices for rate limiting.
+
+- Both checks aim to control request rates.
+- The **Fixed Interval Check** enforces a minimum time between consecutive requests.
+- The **Circular Buffer Check** ensures the request rate does not exceed the allowed number within a 1-second window.
+- The **Fixed Interval Check** is redundant because the **Circular Buffer Check** alone suffices for effective rate limiting.
 
 ---
 
 ### Proposed Solution
 
-**Remove the Fixed Interval Check**, allowing the **Circular Buffer Check** to regulate the request rate effectively, the **Fixed Interval Check** is redundant and adds unnecessary **context switching**. The **Circular Buffer Check** allows for more **adaptive rate limiting**, handling both **burst** and **constant-rate traffic** more efficiently. Example of why being able to handle both kinds of traffic can matter: 
 
+We propose removing the **Fixed Interval Check**, allowing the **Circular Buffer Check** to regulate the request rate effectively. This change reduces unnecessary context switching and improves performance. The **Circular Buffer Check** handles both bursty and constant-rate traffic efficiently.
 
-- **Bursty Traffic:**  
-  - Useful for scenarios like **high-frequency trading**, where multiple actions need to be performed quickly in a **short time frame** (e.g., placing or canceling many orders within milliseconds).  
-  - **Example:** Executing a series of buy/sell actions to take advantage of price movements in a volatile market.
+**Importance of Handling Both Traffic Types:**
 
-- **Constant-Rate Traffic:**  
-  - Ideal for **retrieving data at regular intervals** to maintain accuracy and consistency. This applies to **oracle services** or **pricing feeds**, where information (e.g., exchange rates or asset prices) must be regularly updated to reflect real-time market conditions.  
-  - **Example:** A pricing oracle querying prices from external sources every few seconds to keep the platform's price feeds up to date and prevent discrepancies or stale data.
+- **Bursty Traffic:** Useful in scenarios like high-frequency trading, where multiple actions need to be performed quickly within a short time frame. For example, executing a series of buy/sell actions to capitalize on rapid price movements in a volatile market.
+
+- **Constant-Rate Traffic:** Ideal for retrieving data at regular intervals to maintain accuracy and consistency. This applies to oracle services or pricing feeds, where information must be regularly updated to reflect real-time market conditions.
 
 ---
 
@@ -145,7 +162,7 @@ After removing the **Fixed Interval Check**, throughput increased from **~74 TPS
   
 - Removing this check reduces **context switching and scheduling delays**, improving the efficiency of coroutine execution.
 
-- The **Circular Buffer Check** alone ensures requests are **properly spaced across a 1-second window**, allowing the client to handle both **burst and constant-rate traffic** without unnecessary pauses. This results in smoother, **more efficient request handling**.
+- The **Circular Buffer Check** alone ensures requests are **properly spaced across a 1-second window**, allowing the client to handle both **burst and constant-rate traffic** without unnecessary pauses. This results in smoother, **more efficient request handling**. Furthermore the server side rate limiter also uses circular buffer to track the requests, adhering to the same rate limiting rules will be optimal.
 
 ---
 ### Potential Issue: 429 Errors Due to Latency
@@ -225,12 +242,12 @@ class RateLimiter:
         self.__curr_idx = (self.__curr_idx + 1) % self.__per_second_rate
         yield self
 ```
-#### **Explanation of Adaptive Buffering**  
+#### Explanation of Adaptive Buffering
 
 This enhanced version introduces **adaptive buffering**, which fine-tunes the buffer size based on real-time **latency trends**. This ensures the system stays compliant with the server's rate limits while minimizing unnecessary delays and maximizing throughput. 
 
 
-#### **Key Enhancements**  
+#### Key Enhancements
 1. **Latency Window for Adaptive Buffering:**  
    - A **deque** stores the last **100 latencies** to track trends in request delays.
    - The **buffer size** is updated dynamically using a **moving average** of recorded latencies.
@@ -247,7 +264,7 @@ This enhanced version introduces **adaptive buffering**, which fine-tunes the bu
      ```
    - This approach avoids **excessive sleeping** and ensures the request rate is optimized.
 
-#### **Why Adaptive Buffering Matters**  
+#### Why Adaptive Buffering Matters
 
 Even though the **maximum server-side latency** is known (e.g., `MAX_LATENCY_MS = 50 ms`), real-world latency often varies. **Hardcoding a fixed buffer** is suboptimal, as it can either:
 
@@ -267,7 +284,7 @@ With **adaptive buffering**, the system continuously **learns from recent trends
 
 
 
-## Queue
+## Improving Queue System
 
 ### Current Implementation
 ```python
@@ -313,16 +330,16 @@ This strategy improves **resilience** by providing better queue state management
 
 In the event that the request hits the max retry limit, we will store the `req_id` for manual processing and to prevent sending redundant request, as we can assume that these requests are invalid. 
 
-#### **How Do Retry Requests Get Prioritized Over New Requests?**
+#### How Do Retry Requests Get Prioritized Over New Requests?
 - **Cooldown Window for New Requests:**  
    When new requests are generated, a **short cooldown period** is introduced between them. This window allows the **Queue Manager** to **re-slot retry requests** into the queue before more new requests are created.
 
 - **Not a Strict Priority Queue:**  
    While this is not a strict **priority queue** (where retry requests are inserted at the front), the **Queue Manager** ensures that **retry requests are slotted into the queue as soon as possible**, taking advantage of gaps in new request generation.
 
-#### **Why This Approach Works:**
+#### Why This Approach Works:
 1. **Timely Execution:**  
-   Retry requests, being time-sensitive, get a chance to re-enter the queue before new requests accumulate, ensuring they don’t face further delays.
+   Retry requests, being time-sensitive, get a chance to re-enter the queue before new requests accumulate, ensuring they don't face further delays.
 
 2. **Reduced Request Starvation:**  
    This method prevents **starvation** of retry requests, ensuring every request has a fair chance of being processed.
@@ -334,7 +351,7 @@ This design ensures that **retry requests** are **handled promptly** without req
 
 
 ---
-### Improved Version: Queue Manager
+### Improved Version: Using Queue Manager
 
 ```python
 # Queue Manager
@@ -499,7 +516,7 @@ Currently `rate of generating request > rate of dequeing the request`, this caus
 
 
 ---
-### Caveat: Slow Rate of Consuming Requests
+### Caveat: Request Generating Rate > Request Consumption Rate
 
 We are still limited to only **5 API keys**, each associated with a worker consuming from the queue concurrently. This limitation results in a processing rate that is too slow, causing requests to expire (TTL exceeded) before the workers can handle them. The issue is further exacerbated by latencies on both the client and server sides due to rate limiting constraints, which worsens the rate at which requests are consumed from the queue. As a result, even though the Dead Letter Queue (DLQ) allows for retries, it doesn't resolve the underlying issue—the root cause remains unaddressed.
 
