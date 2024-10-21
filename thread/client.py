@@ -11,7 +11,7 @@ from queue_manager import QueueManager
 from rate_limiter import ThreadSafeRateLimiter, RateLimiterTimeout
 from benchmark import Benchmark
 from logger import configure_logger
-
+from memory_profiler import profile
 
 # region: DO NOT CHANGE - the code within this region can be assumed to be "correct"
 
@@ -105,6 +105,7 @@ def exchange_facing_worker(api_key, queue_manager: QueueManager, rate_limiter: T
         finally:
             queue_manager.main_queue.task_done()
 
+@profile
 def main():
     logger = configure_logger("debug")
     benchmark_logger = configure_logger("stats")

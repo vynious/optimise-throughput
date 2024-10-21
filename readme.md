@@ -2,37 +2,35 @@
 
 ## Table of Contents
 
-1. **[Getting Started](#getting-started)**  
-2. **[Folder Structure](#folder-structure)**  
-3. **[Introduction](#introduction)**  
-4. **[Benchmarking System](#benchmarking-system)**  
-   - [Key Metrics Tracked](#key-metrics-tracked)  
-   - [How the Benchmarking System Works](#how-the-benchmarking-system-works)  
-5. **[Enhancing the Rate Limiter](#enhancing-the-rate-limiter)**  
-   - [Original Implementation](#original-implementation)  
-   - [Identified Issues](#identified-issues)  
-   - [Proposed Solution](#proposed-solution)  
-   - [Observation: Performance Improvement](#observation-performance-improvement)  
-   - [Potential Issue: 429 Errors Due to Latency](#potential-issue-429-errors-due-to-latency)  
-   - [Improved Version: Adaptive Buffering](#improved-version-adaptive-buffering)  
-6. **[Improving Queue System](#improving-queue-system)**  
-   - [Current Implementation](#current-implementation)  
-   - [Solution: Queue Manager with Dead Letter Queue (DLQ)](#solution-queue-manager-with-dead-letter-queue-dlq)  
-   - [Lifecycle with Queue Manager](#lifecycle-with-queue-manager)  
-   - [Monitoring the Queue](#monitoring-the-queue)  
-7. **[Addressing the Root Cause: Bloating of the Main Queue](#addressing-the-root-cause-bloating-of-the-main-queue)**  
-8. **[Exploring Multithreading](#exploring-multithreading)**  
-   - [Rationale](#rationale)  
-   - [Changes to the Current Code](#changes-to-the-current-code)  
-9. **[Comparison Between Asyncio and Threading Client](#comparison-between-asyncio-and-threading-client)**  
-   - [Baseline Comparison](#baseline-of-comparison)  
-   - [Observation](#observation)  
-   - [Explanation](#explanation)  
-10. **[Overview and Modifications Summary](#overview)**  
-    - [Modifying the Original Client for Improved Performance](#modifying-the-original-client-for-improved-performance)  
-    - [Multithreading or Asynchronous?](#multithreading-or-asynchronous)  
-11. **[Final Thoughts](#final-thoughts)**  
-
+1. **[Getting Started](#getting-started)**
+2. **[Folder Structure](#folder-structure)**
+3. **[Introduction](#introduction)**
+4. **[Benchmarking System](#benchmarking-system)**
+   - [Key Metrics Tracked](#key-metrics-tracked)
+   - [How the Benchmarking System Works](#how-the-benchmarking-system-works)
+5. **[Enhancing the Rate Limiter](#enhancing-the-rate-limiter)**
+   - [Original Implementation](#original-implementation)
+   - [Identified Issues](#identified-issues)
+   - [Proposed Solution](#proposed-solution)
+   - [Observation: Performance Improvement](#observation-performance-improvement)
+   - [Potential Issue: 429 Errors Due to Latency](#potential-issue-429-errors-due-to-latency)
+   - [Improved Version: Adaptive Buffering](#improved-version-adaptive-buffering)
+6. **[Improving the Queue System](#improving-the-queue-system)**
+   - [Issue](#issue)
+   - [Solution: Queue Manager with Dead Letter Queue (DLQ)](#solution-queue-manager-with-dead-letter-queue-dlq)
+   - [Lifecycle with Queue Manager](#lifecycle-with-queue-manager)
+   - [Monitoring the Queue](#monitoring-the-queue)
+7. **[Addressing Queue Bloating](#addressing-queue-bloating)**
+8. **[Exploring Multithreading](#exploring-multithreading)**
+   - [Rationale](#rationale)
+   - [Changes to the Current Code](#changes-to-the-current-code)
+9. **[Comparison Between Asyncio and Threading Client](#comparison-between-asyncio-and-threading-client)**
+   - [Baseline Comparison](#baseline-comparison)
+   - [Observation](#observation)
+   - [Summary](#summary)
+10. **[Overview and Modifications Summary](#overview-and-modifications-summary)**
+    - [Modifying the Original Client](#modifying-the-original-client)
+11. **[Final Thoughts](#final-thoughts)**
 
 
 ## Getting Started
@@ -436,212 +434,170 @@ To mitigate this problem, we can consider several workarounds:
 2. **Implementing Multithreading:** By implementing multithreading, we are able to better manage the rate of consumption of the request, resolving the issue of the expired requests TTL. 
 
 
-## Exploring Multithreading 
+## Exploring Multithreading
 
 ### Rationale
 
-To **manage the rate of request processing** and **reduce TTL expirations**, multithreading can be introduced. When have multiple workers accessing the same queue we can increase the deque rate of the requests and prevent overloading the main queue.
+To **manage request processing rate** and **reduce TTL expirations**, we introduced multithreading. Multiple workers accessing the same queue increase the rate at which requests are dequeued, preventing the main queue from overloading.
+
+### Changes to the Current Code
+
+1. **Implement Multithreading Processes:**
+   - **Request Generator:** Run `generate_requests()` in a separate thread (assuming modifications are allowed).
+   - **Metrics Printing:** Move metrics logging to a dedicated thread.
+   - **Exchange Facing Workers:** Run multiple threads for workers handling API requests.
+
+2. **Implement Locking on Shared Resources:**
+   - **Queue Manager:** Use locks when accessing shared data structures like the graveyard to ensure thread safety.
+   - **Thread-Safe Rate Limiter:** Modify the rate limiter to be thread-safe if multiple threads share API keys.
+
+3. **Generate Unique Nonces for Requests:**
+   - Implement a thread-safe mechanism to generate unique nonces, since timestamp-based nonces can cause duplicates when multiple requests are sent simultaneously.
+
+> **Note:** See the `thread` folder for implementation details.
 
 ---
-### Changes to the current code
 
-1. Implement multithreading process to run:
-    - Request Generator (Assuming we are able to change the `generate_requests()` function)
-    - Metrics Printing
-    - Exchange Facing Workers
+## Comparison Between Asyncio and Threading Client
 
-2. Implement Locking on Shared Resources
-    - Queue Manager - Since all the workers are sharing the same queue, there will be resource contention on the graveyard. 
-    - Rate Limiter (Thread safe) - Assuming we are running multiple threads for the same API Key. 
+Below is a comparison of our current implementations using asynchronous programming and multithreading.
 
-3. Getting Unique Nonces when creating request.
-    -  This is needed because currently the nonce used is timestamp-based, however there will potentially be multiple requests being sent at the same time resulting in bad nonces. 
+### Baseline of Comparison
 
-> [!NOTE]
-> See `thread` folder for implementation
+**Asyncio:**
 
-## Comparison between Asyncio and Threading Client
+1. 5 Coroutines (one for each API key).
+2. 1 Coroutine to generate requests.
+3. 1 Coroutine for the Queue Manager to requeue from the DLQ.
+4. 2 Coroutines for monitoring and benchmarking.
 
-This is the comparsion between my current implementation of the client using asynchronous and multi-threading. 
+**Multithreading:**
 
-### Baseline of comparison
-
-**Asyncio**:
-1. 5 Coroutines, 1 for each API Key
-2. 1 Coroutine to generate requests
-3. 1 Coroutine Queue Manager to requeue from DLQ
-4. 2 Coroutines for monitoring and benchmarking
-
-**Multithreading**:
-1. 5 Threads, 1 for each API Key
-2. 1 Thread to generate requests
-3. 1 Thread for Queue Manager to requeue from DLQ
-4. 2 Threads for monitoring and benchmarking
+1. 5 Threads (one for each API key).
+2. 1 Thread to generate requests.
+3. 1 Thread for the Queue Manager to requeue from the DLQ.
+4. 2 Threads for monitoring and benchmarking.
 
 ---
+
 ### Observation
+
+**Asyncio Client (~84 TPS):**
+
+- Achieves higher throughput due to efficient handling of concurrent I/O-bound operations.
+- **Issue:** Requests accumulate in the queue, leading to **TTL expirations**.
+
 ```
 ASYNCIO STATS
---- Accumulated Benchmark Metrics ---
-2024-10-20 22:09:30,164 - stats - INFO - Elapsed Time: 15.00 seconds
-2024-10-20 22:09:30,164 - stats - INFO - Total Successful Requests: 1253
-2024-10-20 22:09:30,164 - stats - INFO - Total Failed Requests: 0
-2024-10-20 22:09:30,164 - stats - INFO - Total Throughput: 83.51 req/sec
-2024-10-20 22:09:30,164 - stats - INFO - Average Latency: 587.35 ms
-2024-10-20 22:09:30,164 - stats - INFO - Queue Sizes - Main: 120, DLQ: 0, Graveyard: 0
-2024-10-20 22:09:30,164 - stats - INFO - Average Queue Sizes - Main: 55.75, DLQ: 0.00
-2024-10-20 22:09:35,165 - stats - INFO - 
---- Accumulated Benchmark Metrics ---
-2024-10-20 22:09:35,165 - stats - INFO - Elapsed Time: 20.00 seconds
-2024-10-20 22:09:35,165 - stats - INFO - Total Successful Requests: 1680
-2024-10-20 22:09:35,165 - stats - INFO - Total Failed Requests: 9
-2024-10-20 22:09:35,165 - stats - INFO - Total Throughput: 83.98 req/sec
-2024-10-20 22:09:35,165 - stats - INFO - Average Latency: 700.96 ms
-2024-10-20 22:09:35,165 - stats - INFO - Queue Sizes - Main: 131, DLQ: 0, Graveyard: 9
-2024-10-20 22:09:35,165 - stats - INFO - Average Queue Sizes - Main: 70.80, DLQ: 0.00
-2024-10-20 22:09:40,166 - stats - INFO - 
---- Accumulated Benchmark Metrics ---
-2024-10-20 22:09:40,166 - stats - INFO - Elapsed Time: 25.01 seconds
-2024-10-20 22:09:40,166 - stats - INFO - Total Successful Requests: 2102
-2024-10-20 22:09:40,166 - stats - INFO - Total Failed Requests: 13
-2024-10-20 22:09:40,166 - stats - INFO - Total Throughput: 84.06 req/sec
-2024-10-20 22:09:40,166 - stats - INFO - Average Latency: 769.45 ms
-2024-10-20 22:09:40,166 - stats - INFO - Queue Sizes - Main: 136, DLQ: 0, Graveyard: 13
-2024-10-20 22:09:40,166 - stats - INFO - Average Queue Sizes - Main: 81.67, DLQ: 0.00
+Elapsed Time: 25.01 seconds
+Total Successful Requests: 2102
+Total Failed Requests: 13
+Total Throughput: 84.06 req/sec
+Average Latency: 769.45 ms
+Queue Sizes - Main: 136, DLQ: 0, Graveyard: 13
+Average Queue Sizes - Main: 81.67, DLQ: 0.00
 ```
+
+**Threading Client (~77 TPS):**
+
+- Slightly lower throughput due to thread overhead.
+- **Advantage:** Multiple threads dequeue requests simultaneously, keeping the queue size small and reducing TTL expirations.
+
 ```
 THREADING STATS
---- Accumulated Benchmark Metrics ---
-2024-10-21 20:38:29,345 - stats - INFO - Elapsed Time: 15.00 seconds
-2024-10-21 20:38:29,345 - stats - INFO - Total Successful Requests: 1163
-2024-10-21 20:38:29,345 - stats - INFO - Total Failed Requests: 0
-2024-10-21 20:38:29,345 - stats - INFO - Total Throughput: 77.45 req/sec
-2024-10-21 20:38:29,345 - stats - INFO - Average Latency (Total): 76.11 ms
-2024-10-21 20:38:34,349 - stats - INFO - Queue Sizes - Main: 0, DLQ: 0, Graveyard: 0
-2024-10-21 20:38:34,350 - stats - INFO - Average Queue Sizes - Main: 0.60, DLQ: 0.00
-2024-10-21 20:38:34,349 - stats - INFO - 
---- Accumulated Benchmark Metrics ---
-2024-10-21 20:38:34,350 - stats - INFO - Elapsed Time: 20.00 seconds
-2024-10-21 20:38:34,350 - stats - INFO - Total Successful Requests: 1543
-2024-10-21 20:38:34,350 - stats - INFO - Total Failed Requests: 0
-2024-10-21 20:38:34,350 - stats - INFO - Total Throughput: 77.07 req/sec
-2024-10-21 20:38:34,350 - stats - INFO - Average Latency (Total): 74.29 ms
-2024-10-21 20:38:39,352 - stats - INFO - Queue Sizes - Main: 3, DLQ: 0, Graveyard: 0
-2024-10-21 20:38:39,352 - stats - INFO - Average Queue Sizes - Main: 1.00, DLQ: 0.00
-2024-10-21 20:38:39,356 - stats - INFO - 
---- Accumulated Benchmark Metrics ---
-2024-10-21 20:38:39,356 - stats - INFO - Elapsed Time: 25.00 seconds
-2024-10-21 20:38:39,356 - stats - INFO - Total Successful Requests: 1939
-2024-10-21 20:38:39,356 - stats - INFO - Total Failed Requests: 0
-2024-10-21 20:38:39,356 - stats - INFO - Total Throughput: 77.48 req/sec
-2024-10-21 20:38:39,356 - stats - INFO - Average Latency (Total): 75.12 ms
-2024-10-21 20:38:44,356 - stats - INFO - Queue Sizes - Main: 1, DLQ: 0, Graveyard: 0
-2024-10-21 20:38:44,356 - stats - INFO - Average Queue Sizes - Main: 1.00, DLQ: 0.00
-2024-10-21 20:38:44,361 - stats - INFO - 
+Elapsed Time: 25.00 seconds
+Total Successful Requests: 1939
+Total Failed Requests: 0
+Total Throughput: 77.48 req/sec
+Average Latency: 75.12 ms
+Queue Sizes - Main: 1, DLQ: 0, Graveyard: 0
+Average Queue Sizes - Main: 1.00, DLQ: 0.00
 ```
 
-The **Asyncio client (~84 TPS)** outperforms the **Threading client (~77 TPS)** in terms of throughput (TPS). This higher throughput is primarily due to asyncio's ability to efficiently handle concurrent I/O-bound operations. However, **more requests accumulate inside the queue in the Asyncio client**, leading to **TTL expirations**. 
-
-In contrast, the Threading client has **multiple threads running workers that are dequeuing the requests from the same queue simultaneously**. Furthermore the locking mechanism on the Queue will help to throttle the rate that requests are added, if the `get` is acquired the `put_nowait` cannot occur likewise for the other side.
-
 ---
-#### Explanation
 
-1. **Concurrency Models: Cooperative vs. Preemptive Multitasking**
+### Explanation
+
+1. **Concurrency Models:**
 
    - **Asyncio (Cooperative Multitasking):**
-     - Utilizes a **single event loop** to manage all coroutines.
-     - Coroutines yield control voluntarily using `await`.
-     - **Limitation:** If a coroutine takes longer than expected or fails to yield, it can **block the event loop**, delaying other coroutines.
-     - **Impact:** Requests wait longer in the queue, increasing the likelihood of TTL expirations.
+     - Uses a **single event loop** to manage coroutines.
+     - Coroutines yield control voluntarily.
+     - **Limitation:** If coroutines don't yield promptly, the event loop can be blocked, delaying other tasks and causing requests to wait longer in the queue, increasing TTL expirations.
 
    - **Threading (Preemptive Multitasking):**
-     - Employs **multiple threads** that the operating system schedules independently.
-     - Threads can run in parallel and are preempted as needed.
-     - **Benefit:** Even if one thread is blocked (e.g., due to I/O), other threads continue processing.
-     - **Impact:** Requests are dequeued and processed promptly, reducing TTL expirations.
+     - Multiple threads scheduled by the OS run independently.
+     - **Benefit:** If one thread is blocked, others continue processing, ensuring prompt dequeuing of requests and reducing TTL expirations.
 
-2. **Queue Drain Speed and TTL Expirations**
+2. **Queue Drain Speed and TTL Expirations:**
 
    - **Asyncio Client:**
-     - **Single Event Loop Bottleneck:** Under heavy load, the event loop may become overwhelmed.
-     - **Result:** Queue grows as requests are generated faster than they are processed.
-     - **Consequence:** Increased **TTL expirations** due to delayed processing.
+     - The event loop may become overwhelmed under heavy load.
+     - Requests accumulate in the queue, leading to more TTL expirations.
 
    - **Threading Client:**
-     - **Concurrent Dequeuing:** Multiple threads access and dequeue from the queue simultaneously.
-     - **Result:** Queue remains small as requests are processed quickly.
-     - **Consequence:** **Fewer TTL expirations** since requests are handled within their valid time frame.
+     - Threads dequeue from the queue concurrently.
+     - Keeps the queue size small, resulting in fewer TTL expirations.
 
-3. **Network I/O Latency and Blocking Scenarios**
+3. **Network I/O Latency and Blocking:**
 
    - **Asyncio Client:**
-     - **Event Loop Sensitivity:** If a coroutine encounters network latency and doesn't yield promptly, it can block the event loop.
-     - **Impact:** Other coroutines are prevented from running, delaying request processing.
-     - **Result:** Accumulation of requests in the queue and potential TTL expirations.
+     - If a coroutine experiences network latency and doesn't yield, it can block the event loop, delaying other coroutines.
 
    - **Threading Client:**
-     - **Independent Threads:** A thread waiting on network I/O doesn't block other threads.
-     - **Impact:** Other threads continue to process requests without interruption.
-     - **Result:** Continuous queue draining and timely request handling.
+     - A blocked thread doesn't affect others.
+     - Other threads continue processing, ensuring continuous queue draining.
 
-4. **Task Switching Overhead in Asyncio**
+4. **Task Switching Overhead:**
 
    - **Asyncio Client:**
-     - **Context Switching Overhead:** Frequent switching between many coroutines can introduce latency.
-     - **Event Loop Saturation:** High task-switching demands can overwhelm the event loop.
-     - **Result:** Delays in processing coroutines, leading to more requests accumulating in the queue.
+     - High task-switching demands can overwhelm the event loop, leading to delays.
 
    - **Threading Client:**
-     - **OS-Level Scheduling:** Threads are managed by the operating system, which can efficiently handle context switching between threads.
-     - **Reduced Overhead:** Although threads have their own overhead, the impact on queue processing is less pronounced.
-     - **Result:** Maintains a low queue size with minimal TTL expirations.
+     - OS-level scheduling handles threads efficiently.
+     - Despite thread overhead, it maintains low queue sizes with minimal TTL expirations.
 
----
-#### Summary
-
-- **Asyncio Client:**
-  - **Pros:** Higher throughput due to efficient non-blocking I/O operations.
-  - **Cons:** Struggles with queue management under heavy load, leading to more TTL expirations as requests wait longer to be processed.
-
-- **Threading Client:**
-  - **Pros:** Better at quickly draining the queue with multiple threads, resulting in timely processing and fewer TTL expirations.
-  - **Cons:** Slightly lower throughput due to the overhead associated with thread management and context switching.
 
 
 ## Overview
 
 ### Modifying the Original Client for Improved Performance
-To enhance throughput and optimize request management, the original client was modified by:
 
-1. **Removing Redundant Waits:**
-   - The **Fixed Interval Check** was removed to avoid unnecessary pauses that caused context switching and degraded performance. This resulted in improved request throughput, as the **Circular Buffer Check** alone provided sufficient rate limiting.
+To enhance throughput and optimize request management, we made the following modifications:
 
-2. **Introducing a Queue Manager:**
-   - A **Queue Manager** was added to manage both the **Main Queue** and **Dead Letter Queue (DLQ)**. This ensures that **expired or failed requests** are not lost but **retried** through the DLQ, preventing unnecessary drops.
-   - **Graveyard Tracking** was also implemented to handle requests that exceed the **maximum retry count**, ensuring manual handling and preventing repeated invalid requests.
-   - With **prioritization of DLQ requests** over new requests, we ensured that time-sensitive retries are given preference without introducing complex priority queue logic.
+1. **Removed Redundant Waits:**
+   - Eliminated the Fixed Interval Check in the rate limiter to reduce unnecessary pauses and context switching.
+   - Relied on the Circular Buffer Check for rate limiting, improving throughput.
 
-### Multithreading or Asynchronous? 
-
-- **Trade-off Between Throughput and Request Delivery Guarantee:**
-  - In an **asynchronous (asyncio)** model, we prioritize **throughput** by leveraging non-blocking I/O operations. This allows us to achieve **higher TPS** (Transactions Per Second) by efficiently switching between multiple tasks. However, the downside is that **requests may accumulate** in the queue, resulting in **TTL expirations** if the event loop is saturated or if network latencies are high. This design favors **high-performance, bursty workloads**, such as high-frequency trading, but may compromise on ensuring all requests are successfully processed.
-  
-  - On the other hand, **multithreading** offers better **guarantee of request delivery** by running multiple threads concurrently, each working in parallel to dequeue and process requests from the shared queue. This prevents queue bloating and minimizes TTL expirations, ensuring that most requests are sent in a timely manner. However, the **thread overhead** and **context-switching latency** result in **lower overall throughput** compared to the asyncio model.
-
-- **Threading Client:**  
-  - Recommended when **reliability** is critical, and **each request must be processed successfully** within its TTL.  
-  - Best suited for **high-stakes transactional systems** (e.g., order books, payment gateways) where the cost of failed or dropped requests is high.  
-  - Although slightly lower in throughput (~8 TPS), the threading client ensures **faster queue draining** and **fewer TTL expirations** due to **parallel execution**.
-
-- **Asyncio Client:**  
-  - Optimal for scenarios where **throughput and performance** are prioritized over strict delivery guarantees.  
-  - With **regulated request generation** or **backpressure mechanisms**, the asyncio client can effectively handle **bursty workloads** and achieve **higher throughput** with minimal overhead.  
-  - Ideal for systems that need to **poll APIs frequently** (e.g., data ingestion services, real-time monitoring) and can tolerate occasional **TTL expirations**.
+2. **Introduced a Queue Manager:**
+   - Added a Queue Manager to handle the Main Queue and DLQ.
+   - Implemented Graveyard Tracking for requests exceeding the maximum retry count.
+   - Prioritized DLQ requests over new ones to ensure time-sensitive retries are processed promptly.
 
 ---
 ### Final Thoughts
 
-Based on the current **implementation and constraints**, I believe the **threading client** offers a more well-rounded solution. Although it sacrifices around **~8 TPS** compared to the asyncio client, it provides a more **reliable rate of delivery**. In contrast, the **asyncio client**, while capable of achieving **higher throughput**, is more prone to **TTL expirations** and **request failures** due to the inherent challenges of **queue management and task scheduling** in asynchronous environments.
+Based on the current **implementation and constraints**, the **asyncio client** is the more suitable choice given the nature of the workload. Since the operations are primarily **I/O-bound** rather than **CPU-intensive**, asyncio fits the criteria better. Its **single-threaded event loop** efficiently handles concurrent requests, minimizing **memory overhead** and **context-switching costs** that threading introduces.
 
-However, if **request generation** can be **regulated**—either through **adaptive rate control** or **backpressure mechanisms**—the asyncio client becomes the more **optimal option**. This is because it handles **high-concurrency I/O-bound workloads** more efficiently and incurs less overhead compared to threading.
+While **multithreading** can ensure timely request delivery, it incurs more **management overhead** due to **synchronization primitives** and **GIL constraints**. Although the **GIL** has limited impact on I/O-bound tasks, threading consumes **more memory** per thread and involves context switching, which makes it **less efficient** for this workload.  
+
+In contrast, **asyncio** offers several advantages:  
+
+1. **Higher Throughput:**  
+   Asyncio achieves **~84 TPS**, outperforming threading’s **77 TPS** in our benchmarks. It efficiently handles multiple concurrent API requests with minimal overhead.
+
+2. **Efficient I/O Management:**  
+   Asyncio excels at **non-blocking operations**, leveraging cooperative multitasking to manage high-frequency I/O tasks without blocking the event loop.
+
+3. **Lower Memory Consumption:**  
+   Avoids **per-thread stack memory** costs and synchronization overhead, resulting in more **efficient resource utilization**.
+
+4. **Scalability with Backpressure:**  
+   With adaptive **request generation and backpressure mechanisms**, asyncio can handle **high concurrency** without overwhelming the event loop, minimizing **TTL expirations** and **dropped requests**.
+
+5. **Simpler Management:**  
+   Asyncio’s single-threaded model eliminates the need for **locks** and reduces **complexity**, making it easier to maintain.
+
+With **request generation adjustments**—through **adaptive rate control** or **backpressure mechanisms**—the challenges of **TTL expirations** and **queue management** can be mitigated. Regulating the request flow ensures that tasks are processed within their valid timeframes, maximizing **throughput without overwhelming the event loop**. 
+
+In summary, the **asyncio client** offers a **faster, more efficient, and scalable solution** for managing **high-frequency I/O-bound tasks**. For future scalability, if CPU-bound workloads are introduced, a **hybrid approach** with **asyncio** for I/O-bound tasks and **multiprocessing** for CPU-bound ones would be optimal.  

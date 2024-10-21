@@ -11,6 +11,8 @@ from queue_manager import QueueManager
 from benchmark import Benchmark
 from request import Request
 from logger import configure_logger
+from memory_profiler import profile
+
 
 # region: DO NOT CHANGE - the code within this region can be assumed to be "correct"
 
@@ -82,7 +84,8 @@ async def exchange_facing_worker(
                 await queue_manager.add_to_dlq(request)
             finally:
                 queue_manager.main_queue.task_done()
-                
+
+@profile          
 def main():
     url = "http://127.0.0.1:9999/api/request"
     loop = asyncio.get_event_loop()
