@@ -61,7 +61,7 @@ python3 thread/client.py
 
 ## Introduction
 
-This document presents a review and modification of the client code to maximize throughput while adhering to server-imposed rate limits. It outlines the issues identified in the existing implementation, the design choices made to address them, and the impact of these changes on performance.
+This document provides a review and optimization of a client application aimed at maximizing throughput while adhering to server-imposed rate limits. The client interacts with a server using multiple API keys and is designed to send as many requests as possible without exceeding rate limits or causing request failures. It includes the issues identified in the existing implementation, the design choices made to address them, and the impact of these changes on performance. 
 
 ## Benchmarking System
 
