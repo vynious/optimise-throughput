@@ -540,7 +540,7 @@ THREADING STATS
 2024-10-21 20:38:44,361 - stats - INFO - 
 ```
 
-The **Asyncio client (~85 TPS)** outperforms the **Threading client (~78 TPS)** in terms of throughput (TPS). This higher throughput is primarily due to asyncio's ability to efficiently handle concurrent I/O-bound operations. However, **more requests accumulate inside the queue in the Asyncio client**, leading to **TTL expirations**. 
+The **Asyncio client (~84 TPS)** outperforms the **Threading client (~77 TPS)** in terms of throughput (TPS). This higher throughput is primarily due to asyncio's ability to efficiently handle concurrent I/O-bound operations. However, **more requests accumulate inside the queue in the Asyncio client**, leading to **TTL expirations**. 
 
 In contrast, the Threading client has **multiple threads running workers that are dequeuing the requests from the same queue simultaneously**. Furthermore the locking mechanism on the Queue will help to throttle the rate that requests are added, if the `get` is acquired the `put_nowait` cannot occur likewise for the other side.
 
@@ -642,6 +642,6 @@ To enhance throughput and optimize request management, the original client was m
 ---
 ### Final Thoughts
 
-Based on the current **implementation and constraints**, I believe the **threading client** offers a better solution for this use case. Although it sacrifices around **~8 TPS** compared to the asyncio client, it provides a more **reliable rate of delivery**. In contrast, the **asyncio client**, while capable of achieving **higher throughput**, is more prone to **TTL expirations** and **request failures** due to the inherent challenges of **queue management and task scheduling** in asynchronous environments.
+Based on the current **implementation and constraints**, I believe the **threading client** offers a more well-rounded solution. Although it sacrifices around **~8 TPS** compared to the asyncio client, it provides a more **reliable rate of delivery**. In contrast, the **asyncio client**, while capable of achieving **higher throughput**, is more prone to **TTL expirations** and **request failures** due to the inherent challenges of **queue management and task scheduling** in asynchronous environments.
 
 However, if **request generation** can be **regulated**—either through **adaptive rate control** or **backpressure mechanisms**—the asyncio client becomes the more **optimal option**. This is because it handles **high-concurrency I/O-bound workloads** more efficiently and incurs less overhead compared to threading.
