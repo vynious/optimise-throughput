@@ -65,6 +65,9 @@ This document provides a review and optimization of a client application aimed a
 
 ## Benchmarking System
 
+> [!NOTE]
+> Implementation of the benchmark class is inside `async/benchmark.py` and `thread/benchmark.py`
+
 ### Key Metrics Tracked
 
 1. **Total Successful Requests**  
@@ -94,7 +97,6 @@ This document provides a review and optimization of a client application aimed a
 
 - **Metrics Printing:**  
   Regularly prints key metrics for real-time feedback during execution.
-
 
 ## Enhancing the Rate Limiter
 
@@ -266,6 +268,9 @@ class RateLimiter:
         self.__curr_idx = (self.__curr_idx + 1) % self.__per_second_rate
         yield self
 ```
+> [!NOTE]
+> Implementation both inside `async` and `thread` folder as `rate_limiter.py`
+
 #### Explanation of Adaptive Buffering
 
 This enhanced version introduces **adaptive buffering**, which fine-tunes the buffer size based on real-time **latency trends**. This ensures the system stays compliant with the server's rate limits while minimizing unnecessary delays and maximizing throughput. 
@@ -347,6 +352,11 @@ To improve request management, we introduce a **Queue Manager** that utilizes:
 1. **Main Queue:** Processes requests under normal operation.
 2. **Dead Letter Queue (DLQ):** Stores failed or timed-out requests for **retry** or further processing. This helps ensure that no valid request is wasted, even if it initially fails or exceeds its TTL.  
 
+
+> [!NOTE]
+> See implementation at `async/queue_manager.py`
+
+
 This strategy improves **resilience** by providing better queue state management. Requests are **re-prioritized** from the DLQ, minimizing dropped requests and ensuring all requests receive multiple attempts before being discarded. In the event that the request hits the max retry limit, we will store the `req_id` for manual processing and to prevent sending redundant request, as we can assume that these requests are invalid. 
 
 #### How Do Retry Requests Get Prioritized Over New Requests?
@@ -357,9 +367,6 @@ This strategy improves **resilience** by providing better queue state management
    While this is not a strict **priority queue** (where retry requests are inserted at the front), the **Queue Manager** ensures that **retry requests are slotted into the queue as soon as possible**, taking advantage of gaps in new request generation. 
 
 This design ensures that **retry requests** are **handled promptly** without requiring a complex priority queue, optimizing for both **simplicity** and **timeliness**.
-
-> [!NOTE]
-> See implementation at `async/queue_manager.py`
 
 ---
 ### Lifecycle with Queue Manager
