@@ -514,6 +514,11 @@ Queue Sizes - Main: 1, DLQ: 0, Graveyard: 0
 Average Queue Sizes - Main: 1.00, DLQ: 0.00
 ```
 
+**CPU Utilization**
+> [!NOTE]
+> See `img/cpu_benchmark_*.png` for utilization graph
+- Asyncio client is slightly less CPU intensive than Thread client. 
+
 ---
 
 ### Explanation
@@ -577,27 +582,10 @@ To enhance throughput and optimize request management, we made the following mod
 ---
 ### Final Thoughts
 
-Based on the current **implementation and constraints**, the **asyncio client** is the more suitable choice given the nature of the workload. Since the operations are primarily **I/O-bound** rather than **CPU-intensive**, asyncio fits the criteria better. Its **single-threaded event loop** efficiently handles concurrent requests, minimizing **memory overhead** and **context-switching costs** that threading introduces.
+Currently, the **threading client** offers **greater reliability** by ensuring **guaranteed request delivery** at the expense of **throughput** (~77 TPS). Its **preemptive multitasking** model ensures that **requests are processed without delay**, even when individual threads are blocked on I/O. This makes threading the better option when **consistent, on-time delivery** is critical, as it avoids **TTL expirations** through **concurrent dequeuing** and **independent thread execution**.
 
-While **multithreading** can ensure timely request delivery, it incurs more **management overhead** due to **synchronization primitives** and **GIL constraints**. Although the **GIL** has limited impact on I/O-bound tasks, threading consumes **more memory** per thread and involves context switching, which makes it **less efficient** for this workload.  
+However, **threading incurs additional overhead** from **context switching** and **synchronization mechanisms**, leading to **higher memory usage**. This can limit performance under heavy loads, especially in **high-frequency I/O-bound tasks** where **asyncio** excels. Asyncio's **non-blocking, single-threaded event loop** minimizes these costs and achieves higher throughput (~84 TPS) by avoiding **thread management overhead**. 
 
-In contrast, **asyncio** offers several advantages:  
+With **adaptive rate control** to regulate request generation, the **asyncio client** can effectively prevent **TTL expirations**, making it the **superior long-term solution**. Its ability to **scale efficiently** under high concurrency, while consuming **less memory**, ensures that it will outperform threading as workloads grow.
 
-1. **Higher Throughput:**  
-   Asyncio achieves **~84 TPS**, outperforming threading’s **77 TPS** in our benchmarks. It efficiently handles multiple concurrent API requests with minimal overhead.
-
-2. **Efficient I/O Management:**  
-   Asyncio excels at **non-blocking operations**, leveraging cooperative multitasking to manage high-frequency I/O tasks without blocking the event loop.
-
-3. **Lower Memory Consumption:**  
-   Avoids **per-thread stack memory** costs and synchronization overhead, resulting in more **efficient resource utilization**.
-
-4. **Scalability with Backpressure:**  
-   With adaptive **request generation and backpressure mechanisms**, asyncio can handle **high concurrency** without overwhelming the event loop, minimizing **TTL expirations** and **dropped requests**.
-
-5. **Simpler Management:**  
-   Asyncio’s single-threaded model eliminates the need for **locks** and reduces **complexity**, making it easier to maintain.
-
-With **request generation adjustments**—through **adaptive rate control** or **backpressure mechanisms**—the challenges of **TTL expirations** and **queue management** can be mitigated. Regulating the request flow ensures that tasks are processed within their valid timeframes, maximizing **throughput without overwhelming the event loop**. 
-
-In summary, the **asyncio client** offers a **faster, more efficient, and scalable solution** for managing **high-frequency I/O-bound tasks**. For future scalability, if CPU-bound workloads are introduced, a **hybrid approach** with **asyncio** for I/O-bound tasks and **multiprocessing** for CPU-bound ones would be optimal.  
+In summary, **threading currently provides guaranteed reliability**, but with proper request regulation, **asyncio becomes the optimal solution** due to its **speed, efficiency, and scalability**.
