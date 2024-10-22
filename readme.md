@@ -305,6 +305,8 @@ Even though the **maximum server-side latency** is known (e.g., `MAX_LATENCY_MS 
 
 With **adaptive buffering**, the system continuously **learns from recent trends** and dynamically adjusts the buffer to balance **performance and compliance**.
 
+>[!NOTE]
+> In some cases of extreme network fluctuation, adpative buffering may still result in 429 Error. Hence a further improvement we can consider is to implement exponential backoffs mechanism to further manage retries. 
 ---
 
 ### Conclusion
@@ -355,12 +357,11 @@ To improve request management, we introduce a **Queue Manager** that utilizes:
 1. **Main Queue:** Processes requests under normal operation.
 2. **Dead Letter Queue (DLQ):** Stores failed or timed-out requests for **retry** or further processing. This helps ensure that no valid request is wasted, even if it initially fails or exceeds its TTL.  
 
-
 > [!NOTE]
 > See implementation at `async/queue_manager.py`
 
 
-This strategy improves **resilience** by providing better queue state management. Requests are **re-prioritized** from the DLQ, minimizing dropped requests and ensuring all requests receive multiple attempts before being discarded. In the event that the request hits the max retry limit, we will store the `req_id` for manual processing and to prevent sending redundant request, as we can assume that these requests are invalid. 
+This strategy improves **resilience** by providing better queue state management. Requests are **re-prioritized** from the DLQ, minimizing dropped requests and ensuring all requests receive multiple attempts before being discarded. In the event that the request hits the max retry limit we specified, we will store the `req_id` in `self.graveyard` for manual processing, debugging purposes and to prevent sending redundant request, as we can assume that these requests are invalid. 
 
 #### How Do Retry Requests Get Prioritized Over New Requests?
 - **Cooldown Window for New Requests:**  
@@ -373,6 +374,8 @@ This design ensures that **retry requests** are **handled promptly** without req
 
 ---
 ### Lifecycle with Queue Manager
+
+This diagram illustrates the interaction between the queue (in Queue Manager), DLQ (in Queue Manager) and workers.
 ![New Sequence with Queue Manager](./img/uml_seq_diagram.png)
 
 ---
