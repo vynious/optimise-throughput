@@ -22,7 +22,7 @@ class RateLimiter:
         self.__request_times = [0] * per_second_rate
         self.__curr_idx = 0
 
-        # Adaptive latency buffer
+        # adaptive latency buffer
         self.__latency_window = deque(maxlen=100)
         self.__buffer = 40  # Initial buffer (ms)
         self.__min_buffer = 30  # Min buffer (ms)

@@ -51,20 +51,20 @@ class QueueManager:
     async def monitor_queues(self, interval: int = 5):
         """Monitor queue sizes and log statistics periodically."""
         while True:
-            # Get queue sizes
+            # get queue sizes
             main_queue_size = self.main_queue.qsize()
             dlq_size = self.dlq_queue.qsize()
             graveyard_size = len(self.__graveyard)
 
-            # Track history for averages
+            # track history for averages
             self.main_queue_size_history.append(main_queue_size)
             self.dlq_size_history.append(dlq_size)
 
-            # Calculate averages
+            # calculate averages
             avg_main_size = sum(self.main_queue_size_history) / len(self.main_queue_size_history)
             avg_dlq_size = sum(self.dlq_size_history) / len(self.dlq_size_history)
 
-            # Log queue sizes and averages
+            # log queue sizes and averages
             self.logger.info(
                 f"Queue Sizes - Main: {main_queue_size}, DLQ: {dlq_size}, Graveyard: {graveyard_size}"
             )
@@ -72,13 +72,13 @@ class QueueManager:
                 f"Average Queue Sizes - Main: {avg_main_size:.2f}, DLQ: {avg_dlq_size:.2f}"
             )
 
-            # Check thresholds and log warnings if exceeded
+            # check thresholds and log warnings if exceeded
             if main_queue_size > 1000:
                 print(f"Main queue size ({main_queue_size}) exceeds 1000!")
             if dlq_size > 100:
                 print(f"DLQ size ({dlq_size}) exceeds 100!")
 
-            # Sleep for the specified interval (non-blocking)
+            # sleep for the specified interval (non-blocking)
             await asyncio.sleep(interval)
 
     def get_queue_stats(self):

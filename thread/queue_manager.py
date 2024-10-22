@@ -18,7 +18,7 @@ class QueueManager:
         self.graveyard = set()
         self.lock = threading.Lock()
         
-        # Monitoring attributes
+        # for monitoring
         self.main_queue_size_history = deque(maxlen=100)
         self.dlq_size_history = deque(maxlen=100)
         
