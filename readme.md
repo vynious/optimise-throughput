@@ -459,7 +459,7 @@ To **manage request processing rate** and **reduce TTL expirations**, we introdu
    - **Thread-Safe Rate Limiter:** Modify the rate limiter to be thread-safe if multiple threads share API keys.
 
 > [!Note] 
-> We use timestamps for nonces, as the GIL (Global Interpreter Lock) ensures only one thread executes Python code at a time, minimizing the chance of generating the same timestamp. However, under high request volumes, there’s still a risk of **nonce collisions** if multiple requests fall within the same millisecond. To avoid future issues, consider combining timestamps with a **thread-local counter** or **UUID** for guaranteed uniqueness.
+> We use timestamps for nonces, as the GIL (Global Interpreter Lock) ensures only one thread executes Python code at a time, minimizing the chance of generating the same timestamp. However, under high request volumes, there's still a risk of **nonce collisions** if multiple requests fall within the same millisecond. To avoid future issues, consider combining timestamps with a **thread-local counter** or **UUID** for guaranteed uniqueness.
 
 ---
 
