@@ -521,47 +521,16 @@ Average Queue Sizes - Main: 1.00, DLQ: 0.00
 
 ---
 
-### Explanation
+### Possible Explanations
 
-1. **Concurrency Models:**
+**CPU Utilization and GIL Impact:**  
+- The **Global Interpreter Lock (GIL)** in Python limits the performance of multi-threaded programs by allowing only one thread to execute Python bytecode at a time, even on multi-core CPUs. This makes the **Threading client** more CPU-intensive since threads contend for the GIL. In contrast, **Asyncio** bypasses the GIL to some extent by focusing on I/O-bound tasks with a single event loop, resulting in slightly lower CPU usage.
 
-   - **Asyncio (Cooperative Multitasking):**
-     - Uses a **single event loop** to manage coroutines.
-     - Coroutines yield control voluntarily.
-     - **Limitation:** If coroutines don't yield promptly, the event loop can be blocked, delaying other tasks and causing requests to wait longer in the queue, increasing TTL expirations.
+**Throughput (TPS) and GIL Constraints:**  
+- The **GIL** can restrict the **Threading client;s** throughput, contributing to its lower **77.48 TPS**, as only one thread can execute Python code at a time. However, because threading is more effective at handling blocking I/O, it maintains stable performance. **Asyncio**, despite achieving higher **84.06 TPS**, leverages non-blocking I/O and cooperative multitasking, allowing it to manage more requests without being restricted by the GIL.
 
-   - **Threading (Preemptive Multitasking):**
-     - Multiple threads scheduled by the OS run independently.
-     - **Benefit:** If one thread is blocked, others continue processing, ensuring prompt dequeuing of requests and reducing TTL expirations.
-
-2. **Queue Drain Speed and TTL Expirations:**
-
-   - **Asyncio Client:**
-     - The event loop may become overwhelmed under heavy load.
-     - Requests accumulate in the queue, leading to more TTL expirations.
-
-   - **Threading Client:**
-     - Threads dequeue from the queue concurrently.
-     - Keeps the queue size small, resulting in fewer TTL expirations.
-
-3. **Network I/O Latency and Blocking:**
-
-   - **Asyncio Client:**
-     - If a coroutine experiences network latency and doesn't yield, it can block the event loop, delaying other coroutines.
-
-   - **Threading Client:**
-     - A blocked thread doesn't affect others.
-     - Other threads continue processing, ensuring continuous queue draining.
-
-4. **Task Switching Overhead:**
-
-   - **Asyncio Client:**
-     - High task-switching demands can overwhelm the event loop, leading to delays.
-
-   - **Threading Client:**
-     - OS-level scheduling handles threads efficiently.
-     - Despite thread overhead, it maintains low queue sizes with minimal TTL expirations.
-
+**Graveyard and Queue Size Management:**  
+- While **Asyncio** excels in throughput, the accumulation of **136 requests** in its queue indicates that the event loop struggles under heavy load, leading to **13 TTL expirations**. On the other hand, the **Threading client** avoids queue buildup, keeping it at **1 request**, with no expirations, as multiple threads can process requests independently. However, the effectiveness of threading is limited by the GIL, which can reduce its scalability for CPU-bound workloads.
 
 
 ## Overview
