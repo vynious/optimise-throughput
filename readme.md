@@ -444,7 +444,7 @@ To mitigate this problem, we can consider several workarounds:
 ### Rationale
 
 To **manage request processing rate** and **reduce TTL expirations**, we introduced multithreading. Multiple workers accessing the same queue increase the rate at which requests are dequeued, preventing the main queue from overloading.
-> **Note:** See the `thread` folder for implementation details.
+> [!Note] See the `thread` folder for implementation details.
 
 ### Changes to the Current Code
 
@@ -457,7 +457,7 @@ To **manage request processing rate** and **reduce TTL expirations**, we introdu
    - **Queue Manager:** Use locks when accessing shared data structures like the graveyard to ensure thread safety.
    - **Thread-Safe Rate Limiter:** Modify the rate limiter to be thread-safe if multiple threads share API keys.
 
-> **Note:** We use timestamps for nonces, as the GIL (Global Interpreter Lock) ensures only one thread executes Python code at a time, minimizing the chance of generating the same timestamp. However, under high request volumes, there’s still a risk of **nonce collisions** if multiple requests fall within the same millisecond. To avoid future issues, consider combining timestamps with a **thread-local counter** or **UUID** for guaranteed uniqueness.
+> [!Note] We use timestamps for nonces, as the GIL (Global Interpreter Lock) ensures only one thread executes Python code at a time, minimizing the chance of generating the same timestamp. However, under high request volumes, there’s still a risk of **nonce collisions** if multiple requests fall within the same millisecond. To avoid future issues, consider combining timestamps with a **thread-local counter** or **UUID** for guaranteed uniqueness.
 
 ---
 
