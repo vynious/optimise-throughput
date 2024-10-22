@@ -2,8 +2,6 @@
 
 ## Table of Contents
 
-1. **[Getting Started](#getting-started)**
-2. **[Folder Structure](#folder-structure)**
 3. **[Introduction](#introduction)**
 4. **[Benchmarking System](#benchmarking-system)**
    - [Key Metrics Tracked](#key-metrics-tracked)
@@ -33,43 +31,13 @@
 11. **[Final Thoughts](#final-thoughts)**
 
 
-## Getting Started
-
-```
-pip install requirements.txt
-
-# run the server
-python3 original_server.py
-
-# run async client
-python3 async/client.py
-
-# run multithreaded client
-python3 thread/client.py
-
-# run with profiling
-mprof run python3 <MODEL>/client.py 
-
-# visualise graph
-mprof plot
-
-```
-
-## Folder Structure
-
-- /async - folder for Asynchronous client
-- /thread - folder for multi-threading client
-- original_client.py - original version of the provided client
-- original_server.py - original version of the provided server
-
 ## Introduction
 
 This document provides a review and optimization of a client application aimed at maximizing throughput while adhering to server-imposed rate limits. The client interacts with a server using multiple API keys and is designed to send as many requests as possible without exceeding rate limits or causing request failures. It includes the issues identified in the existing implementation, the design choices made to address them, and the impact of these changes on performance. 
 
-## Benchmarking System
+Link to the github repository [here](https://github.com/vynious/optimise-throughput/tree/main)
 
-> [!NOTE]
-> Implementation of the benchmark class is inside `async/benchmark.py` and `thread/benchmark.py`
+## Benchmarking System
 
 ### Key Metrics Tracked
 
@@ -271,8 +239,6 @@ class RateLimiter:
         self.__curr_idx = (self.__curr_idx + 1) % self.__per_second_rate
         yield self
 ```
-> [!NOTE]
-> Implementation both inside `async` and `thread` folder as `rate_limiter.py`
 
 #### Explanation of Adaptive Buffering
 
@@ -443,7 +409,7 @@ To mitigate this problem, we can consider several workarounds:
 
 To **manage request processing rate** and **reduce TTL expirations**, we introduced multithreading. Multiple workers accessing the same queue increase the rate at which requests are dequeued, preventing the main queue from overloading.
 > [!Note] 
-> See the `thread` folder for implementation details.
+> See [folder](https://github.com/vynious/optimise-throughput/tree/main/thread) for implementation details.
 
 ### Changes to the Current Code
 
@@ -519,7 +485,7 @@ Average Queue Sizes - Main: 1.00, DLQ: 0.00
 
 **CPU Utilization**
 > [!NOTE]
-> See `img/cpu_benchmark_*.png` for utilization graph
+> See [here](https://github.com/vynious/optimise-throughput/blob/main/img) for utilization graph for both clients
 - Asynchronous client is slightly less CPU intensive than Multithreading client. 
 
 ---
@@ -561,3 +527,5 @@ However, **threading incurs additional overhead** from **context switching** and
 With **adaptive rate control** to regulate request generation, the **Asynchronous client** can effectively prevent **TTL expirations**, making it the **superior long-term solution**. Its ability to **scale efficiently** under high concurrency, while consuming **less memory**, ensures that it will outperform threading as workloads grow.
 
 In summary, **threading currently provides guaranteed reliability**, but with proper request regulation, **Asynchronous becomes the optimal solution** due to its **speed, efficiency, and scalability**.
+
+**Link to github repo [here](https://github.com/vynious/optimise-throughput/tree/main)**
