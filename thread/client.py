@@ -1,4 +1,4 @@
-import sys
+
 import time
 import random
 
@@ -61,16 +61,6 @@ def generate_requests_threadsafe(queue: ThreadSafeQueue):
         sleep_ms = random.randint(0, MAX_SLEEP_MS)
         time.sleep(sleep_ms / 1000.0)
 
-def get_unique_nonce():
-    if not hasattr(thread_local, 'nonce_counter'):
-        thread_local.nonce_counter = 0
-    thread_local.nonce_counter += 1
-    timestamp = timestamp_ms()
-    thread_id = threading.get_ident()
-    # Concatenate values to form a unique nonce
-    nonce_str = f"{timestamp}{thread_id}{thread_local.nonce_counter}"
-    # Convert to integer if needed
-    return int(nonce_str)
 
 def exchange_facing_worker(api_key, queue_manager: QueueManager, rate_limiter: ThreadSafeRateLimiter, logger, benchmark: Benchmark):
     """Process requests in a thread-safe way."""
@@ -87,7 +77,7 @@ def exchange_facing_worker(api_key, queue_manager: QueueManager, rate_limiter: T
         try:
             with rate_limiter.acquire(timeout_ms=remaining_ttl):
                 try:
-                    data = {'api_key': api_key, 'nonce': get_unique_nonce(), 'req_id': request.req_id}
+                    data = {'api_key': api_key, 'nonce': timestamp_ms(), 'req_id': request.req_id}
                     response = session.get("http://127.0.0.1:9999/api/request", params=data, timeout=1.0)
                     json_resp = response.json()
                     latency = timestamp_ms() - request.create_time
